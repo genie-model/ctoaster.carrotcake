@@ -92,7 +92,7 @@ def setup_error(msg):
 
 print('\nChecking build platform...')
 if not U.read_ctoaster_config():
-    sys.exit('Internal error: GENIE set up failed!')
+    sys.exit('Internal error: cTOASTER set up failed!')
 
 platform = U.discover_platform()
 if platform == 'LINUX' or platform == 'WINDOWS':
@@ -107,18 +107,17 @@ except Exception as e:
 print('    Fortran compiler:      ' + f90['compiler'])
 print('    NetCDF base directory: ' + " ".join(netcdf['base']))
 
-# Test Git version.
-
-if platform == 'LINUX':
-    print('\nTesting Git version...')
-
-    gitversion = sp.check_output(['git', '--version']).strip().split()[2]
-    gitversion = map(int, gitversion.split('.'))
-    if gitversion[0] < 2 or gitversion[1] < 3:
-        setup_error('GIT VERSION IS TOO OLD!')
-    else:
-        print('  Git version OK')
-
+## Test Git version.
+#
+#if platform == 'LINUX':
+#    print('\nTesting Git version...')
+#
+#    gitversion = sp.check_output(['git', '--version']).strip().split()[2]
+#    gitversion = map(int, gitversion.split('.'))
+#    if gitversion[0] < 2 or gitversion[1] < 3:
+#        setup_error('GIT VERSION IS TOO OLD!')
+#    else:
+#        print('  Git version OK')
 
 # Test Python setup.
 
