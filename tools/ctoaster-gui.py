@@ -2,11 +2,11 @@ from __future__ import print_function
 import os, os.path, shutil, re, glob
 import platform as plat
 import subprocess as sp
-import Tkinter as tk
-import tkSimpleDialog as tkSD
-import tkMessageBox as tkMB
-import tkFont
-import ttk
+import tkinter as tk
+import tkinter.simpledialog as tkSD
+import tkinter.messagebox as tkMB
+import tkinter.font as TkFont
+from tkinter import ttk
 
 # General GENIE utilities.
 import utils as U

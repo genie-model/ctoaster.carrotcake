@@ -1,5 +1,5 @@
 import os, os.path, shutil
-import Tkinter as tk
+import tkinter as tk
 from job import *
 import utils as U
 

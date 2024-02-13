@@ -1,7 +1,7 @@
 from __future__ import print_function
-import Tkinter
-from Tkinter import _flatten, _join, _stringify, _splitdict
-import ttk
+import tkinter
+from tkinter import _flatten, _join, _stringify, _splitdict
+from tkinter import ttk
 import os.path, platform
 
 def winpath_to_id(p):
@@ -20,7 +20,7 @@ def tlmap(f, seq):
         return res
 
 
-class FileTreeview(ttk.Widget, Tkinter.XView, Tkinter.YView):
+class FileTreeview(ttk.Widget, tkinter.XView, tkinter.YView):
     """Ttk Treeview widget displays a hierarchical collection of items.
 
     Each item has a textual label, an optional image, and an optional list

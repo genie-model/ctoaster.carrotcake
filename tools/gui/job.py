@@ -1,8 +1,8 @@
 from __future__ import print_function
 import os, os.path, glob, datetime, shutil, sys, time
 import subprocess as sp
-import Tkinter as tk
-import tkMessageBox as tkMB
+import tkinter as tk
+import tkinter.messagebox as tkMB
 import utils as U
 
 #----------------------------------------------------------------------

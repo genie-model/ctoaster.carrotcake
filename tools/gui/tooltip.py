@@ -56,7 +56,7 @@ create_contents() : creates the contents of the tooltip window (by default a
 '''
 # Ideas gleaned from PySol
 
-import Tkinter
+import tkinter
 
 class ToolTip:
     def __init__(self, master, text='Your text here', delay=750, **opts):
