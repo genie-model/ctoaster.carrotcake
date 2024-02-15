@@ -1,17 +1,16 @@
-from __future__ import print_function
 import os, os.path, sys, shutil, argparse, glob, signal
 import subprocess as sp
 import platform as plat
 import datetime as dt
 try:
-    import Queue as qu
+    import queue as qu
     import threading as thr
-    import Tkinter as tk
-    import tkFont
-    import tkMessageBox
-    import ttk
+    import tkinter as tk
+    from tkinter import font as tkFont
+    from tkinter import messagebox as tkMessageBox
+    from tkinter import ttk
     gui_available = True
-except:
+except ImportError:
     gui_available = False
 
 import utils as U
@@ -157,7 +156,7 @@ if gui_available:
         def manage(self, cmd, logfp, cont, *rest):
             self.cont = cont
             self.contrest = rest
-            self.proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.STDOUT)
+            self.proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.STDOUT, encoding='utf-8')  # Added encoding
             q = qu.Queue()
             t = thr.Thread(target=self.reader_thread, args=[q, logfp]).start()
             self.update(q)
@@ -235,9 +234,9 @@ def console_manage(cmd, logfp, cont, *rest):
     global runner
     runner = None
     signal.signal(signal.SIGTERM, cleanup)
-    runner = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.STDOUT)
+    runner = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.STDOUT, encoding='utf-8')  # Added encoding
     while True:
-        line = runner.stdout.readline().decode('utf8')
+        line = runner.stdout.readline()  # Removed .decode('utf8')
         if not line: break
         logfp.write(line)
         logfp.flush()
@@ -248,45 +247,48 @@ def console_manage(cmd, logfp, cont, *rest):
     cont(res, *rest)
 
 
-# Command line arguments.
-
-def usage():
-    print("""
-Usage: go <command>
-
-Commands:
-  clean                                 Clean results
-  cleaner                               Clean results and model build
-  clean-build                           Just clean model build
-  build [<build-type>] [--no-progress]  Build model
-  run [<build-type>] [--no-progress]    Build and run model
-  set-platform <platform>               Set explicit build platform
-  clear-platform                        Clear explicit build platform
-""")
-    sys.exit()
+#Defining the default values for build_type and progress
 
 build_type = 'ship'
 progress = True
-if not gui:
-    if len(sys.argv) < 2: usage()
-    action = sys.argv[1]
-    if action in ['clean', 'cleaner', 'clear-platform', 'clean-build']:
-        if len(sys.argv) != 2: usage()
-    elif action == 'set-platform':
-        if len(sys.argv) != 3: usage()
-        platform = sys.argv[2]
-    elif action in ['build', 'run']:
-        if len(sys.argv) == 3:
-            if sys.argv[2] == '--no-progress': progress = False
-            else:                              build_type = sys.argv[2]
-        elif len(sys.argv) == 4:
-            build_type = sys.argv[2]
-            if sys.argv[3] == '--no-progress': progress = False
-            else:                              usage()
-        elif len(sys.argv) != 2: usage()
-        if build_type and build_type not in U.build_types:
-            sys.exit('Unrecognised build type: "' + build_type + '"')
-    else: usage()
+
+# Command line arguments.
+
+parser = argparse.ArgumentParser(description='Model build and run commands')
+subparsers = parser.add_subparsers(dest='command', help='Commands')
+
+# Subparser for clean commands
+clean_parser = subparsers.add_parser('clean', help='Clean results')
+cleaner_parser = subparsers.add_parser('cleaner', help='Clean results and model build')
+clean_build_parser = subparsers.add_parser('clean-build', help='Just clean model build')
+
+# Subparser for build and run commands
+for cmd in ['build', 'run']:
+    cmd_parser = subparsers.add_parser(cmd, help=f'{cmd.capitalize()} model')
+    cmd_parser.add_argument('build_type', nargs='?', default='ship', choices=U.build_types, help='Build type')
+    cmd_parser.add_argument('--no-progress', action='store_false', dest='progress', help='Disable progress output')
+
+# Subparser for platform commands
+set_platform_parser = subparsers.add_parser('set-platform', help='Set explicit build platform')
+set_platform_parser.add_argument('platform', help='Platform name')
+clear_platform_parser = subparsers.add_parser('clear-platform', help='Clear explicit build platform')
+
+args = parser.parse_args()
+
+# Handling commands based on parsed arguments
+if args.command in ['clean', 'cleaner', 'clear-platform', 'clean-build']:
+    # Handle cleaning commands
+    pass  # Implement the command-specific logic here
+elif args.command == 'set-platform':
+    platform = args.platform
+    # Implement platform setting logic here
+elif args.command in ['build', 'run']:
+    build_type = args.build_type
+    progress = args.progress
+    # Implement build or run logic here
+else:
+    parser.print_help()
+    sys.exit(1)
 
 
 # Model configuration for job.
@@ -300,15 +302,20 @@ exe_name = 'cupcake-' + build_type + '.exe' if build_type else 'cupcake.exe'
 # directories for model setup for this job.
 
 def clean(clean_model):
-    message('CLEANING MODEL RESULTS' +
-            (' AND BUILD' if clean_model else '') + '...')
+    clean_msg = "CLEANING MODEL RESULTS AND BUILD" if clean_model else "CLEANING MODEL RESULTS"
+    message(f'{clean_msg}...')
     if clean_model:
-        model_config.clean()					# calls method 'clean' for class ModelConfig [utils.py]
-        for exe in glob.iglob('cupcake-*.exe'): os.remove(exe)	# finds instances of 'cupcake-*.exe' in the current [ctoaster-jobs] directory (and recursively in all subdirectories)
-        if os.path.exists('build.log'): os.remove('build.log')	# (remove 'build.log' if it exists)
-    if os.path.exists('run.log'): os.remove('run.log')		# (remove 'run.log' if it exists)
-    for d, ds, fs in os.walk('output'):
-        for f in fs: os.remove(os.path.join(d, f))
+        model_config.clean()  # calls method 'clean' for class ModelConfig [utils.py]
+        for exe in glob.iglob('cupcake-*.exe'):
+            os.remove(exe)  # finds and removes 'cupcake-*.exe' files
+        if os.path.exists('build.log'):
+            os.remove('build.log')  # removes 'build.log' if it exists
+    if os.path.exists('run.log'):
+        os.remove('run.log')  # removes 'run.log' if it exists
+    for d, _, fs in os.walk('output'):
+        for f in fs:
+            os.remove(os.path.join(d, f))  # removes files in 'output' directory
+
 
 def clean_build():
     message('REMOVING BUILD' + '...')
@@ -321,30 +328,32 @@ def clean_build():
 def build(cont):
     model_config.setup()
     model_dir = model_config.directory()
-    if os.path.exists(os.path.join('config','platform-name')):
-        print('manual platform file has been set by set-platform')
-        if not os.path.exists(os.path.join(model_dir,'config')):
-            os.makedirs(os.path.join(model_dir,'config'))
-        if not os.path.exists(os.path.join(model_dir,'config','platform-name')):
-            print('manual platform does not have platform-name file, copying')
-            shutil.copy(os.path.join('config','platform-name'), os.path.join(model_dir,'config'))
-    with open(os.devnull, 'w') as sink:
-        cmd = [scons, '-q', '-C', model_dir]
-        cmd = [sys.executable] + cmd
-        need_build = sp.call(cmd, stdout=sink, stderr=sink)
+    if os.path.exists(os.path.join('config', 'platform-name')):
+        print('Manual platform file has been set by set-platform')
+        if not os.path.exists(os.path.join(model_dir, 'config')):
+            os.makedirs(os.path.join(model_dir, 'config'))
+        if not os.path.exists(os.path.join(model_dir, 'config', 'platform-name')):
+            print('Manual platform does not have platform-name file, copying')
+            shutil.copy(os.path.join('config', 'platform-name'), os.path.join(model_dir, 'config'))
+    cmd = [scons, '-q', '-C', model_dir]
+    cmd = [sys.executable] + cmd
+    try:
+        result = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
+        need_build = False
+    except sp.CalledProcessError:
+        need_build = True
+
     if not need_build:
         message('Build is up to date')
-        shutil.copy(os.path.join(model_dir, 'cupcake.exe'),
-                    os.path.join(os.curdir, exe_name))
+        shutil.copy(os.path.join(model_dir, 'cupcake.exe'), os.path.join(os.curdir, exe_name))
         if cont: cont()
-        else: return
-    message('BUILDING: ' + model_config.display_model_version)
-    logfp = open(os.path.join(model_dir, 'build.log'), 'w')
-    rev = 'rev=' + model_config.display_model_version
-    cmd = [scons, '-C', model_dir, rev]
-    #cmd = [sys.executable, '-u'] + cmd
-    cmd.append('progress=' + ('1' if progress else '0'))
-    manage(cmd, logfp, build2, cont)
+        return
+
+    message(f'BUILDING: {model_config.display_model_version}')
+    with open(os.path.join(model_dir, 'build.log'), 'w') as logfp:
+        rev = f'rev={model_config.display_model_version}'
+        cmd = [scons, '-C', model_dir, rev, f'progress={"1" if progress else "0"}']
+        manage(cmd, logfp, build2, cont)
 
 def build2(result, cont):
     shutil.copy(os.path.join(model_dir, 'build.log'), os.curdir)
@@ -365,14 +374,15 @@ tend = None
 
 def run(cont=None):
     global tstart
-    message('RUNNING: ' + model_config.display_model_version)
+    message(f'RUNNING: {model_config.display_model_version}')
     platform = U.discover_platform()
     exec(open(os.path.join(U.ctoaster_root, 'platforms', platform)).read())
     if 'runtime_env' in locals():
-        for k, v in locals()['runtime_env'].items(): os.environ[k] = v
-    logfp = open('run.log', 'w')
-    tstart = dt.datetime.now()
-    manage(os.path.join('.', exe_name), logfp, run2, cont)
+        for k, v in locals()['runtime_env'].items():
+            os.environ[k] = v
+    with open('run.log', 'w') as logfp:
+        tstart = dt.datetime.now()
+        manage(os.path.join('.', exe_name), logfp, run2, cont)
 
 def run2(result, cont):
     global tstart
@@ -399,19 +409,20 @@ else:
     message = console_message
     line = console_line
     manage = console_manage
-    if   action == 'clear-platform':
+    # Non-GUI command execution
+    if args.command == 'clear-platform':
         if os.path.exists(pfile): os.remove(pfile)
-    elif action == 'set-platform':
-        with open(pfile, 'w') as ofp: print(platform, file=ofp)
-    elif action == 'clean':
+    elif args.command == 'set-platform':
+        with open(pfile, 'w') as ofp: print(args.platform, file=ofp)
+    elif args.command == 'clean':
         clean(False)
-    elif action == 'cleaner':
+    elif args.command == 'cleaner':
         clean(True)
-    elif action == 'clean-build':
+    elif args.command == 'clean-build':
         clean_build()
-    elif action == 'build':
+    elif args.command == 'build':
+        # Assuming build function can handle None or specific build type and progress flag
         build(None)
-    elif action == 'run':
-        build(run)
-    else:
-        usage()
+    elif args.command == 'run':
+        # For the 'run' command, ensuring build function is called appropriately
+        build(run)  # Adjusted to match the original functionality
