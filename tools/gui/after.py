@@ -1,4 +1,5 @@
-import ttk
+import tkinter as tk
+from tkinter import ttk
 
 #  AFTER TIMER HANDLING
 #
@@ -9,15 +10,16 @@ import ttk
 # here to make sure everything does get cleaned up before exit.  This
 # class is used as a mixin to the main application class.
 
+
 class AfterHandler:
     def __init__(self, root):
         self.root = root
-        self.aft_c2id = { }
-        self.aft_id2c = { }
+        self.aft_c2id = {}
+        self.aft_id2c = {}
         self.aft_n = 0
 
     def after(self, ms, func=None, *args):
-        id = ttk.Frame.after(self, ms, self.trigger, self.aft_n, func, *args)
+        id = tk.Frame.after(self, ms, self.trigger, self.aft_n, func, *args)
         self.aft_c2id[self.aft_n] = id
         self.aft_id2c[id] = self.aft_n
         self.aft_n += 1
@@ -34,7 +36,8 @@ class AfterHandler:
         func(*args)
 
     def quit(self):
-        for id in self.aft_id2c.keys(): ttk.Frame.after_cancel(self, id)
+        for id in self.aft_id2c.keys():
+            ttk.Frame.after_cancel(self, id)
         # This arrangement (calling quit then destroy on the root
         # object) is needed to avoid a threading bug on Windows.
         self.root.quit()
