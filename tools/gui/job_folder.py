@@ -61,7 +61,7 @@ def folder_img():
     global folder_image
     if not folder_image:
         folder_image = tk.PhotoImage(
-            file=os.path.join(U.cgenie_root, "tools", "images", "status-FOLDER.gif")
+            file=os.path.join(U.ctoaster_root, "tools", "images", "status-FOLDER.gif")
         )
     return folder_image
 
@@ -72,7 +72,7 @@ def folder_img():
 #
 
 # Job folder management: abstraction for the folder hierarchy under
-# the cgenie-jobs directory.
+# the ctoaster-jobs directory.
 
 
 class JobFolder:

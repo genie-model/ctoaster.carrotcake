@@ -1,7 +1,7 @@
 import os, os.path
 
 # Class for "following" files, i.e. capturing changes in a file as a
-# process writes output into it.  Used for capturing GENIE model and
+# process writes output into it.  Used for capturing cTOASTER model and
 # build process output for display in the GUI.
 
 class Tailer:

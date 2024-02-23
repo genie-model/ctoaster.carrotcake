@@ -5,6 +5,7 @@ import platform as plat
 import re
 import shutil
 import subprocess as sp
+import sys
 import tkinter as tk
 import tkinter.font as TkFont
 import tkinter.messagebox as tkMB
@@ -14,7 +15,7 @@ from tkinter import ttk
 # Most of the GUI code is in these modules...
 from gui import *
 
-# General GENIE utilities.
+# General cTOASTER utilities.
 import utils as U
 
 # from gui.tooltip import *
@@ -29,10 +30,10 @@ import utils as U
 
 # ----------------------------------------------------------------------
 
-# GENIE configuration
+# cTOASTER configuration
 
 if not U.read_ctoaster_config():
-    sys.exit("GENIE not set up: run the setup-ctoaster script!")
+    sys.exit("cTOASTER not set up: run the setup-ctoaster script!")
 
 
 # Platform setup, including any runtime environment variables needed
@@ -264,7 +265,7 @@ class Application(AfterHandler, ttk.Frame):
         # Clear panels: this MUST be done before trying to delete any
         # files so that any data files get closed.  Otherwise Windows
         # won't delete them...
-        for pan in self.panels.itervalues():
+        for pan in self.panels.items():
             pan.clear()
 
         # Clean everything up: status, command and log files, model
@@ -293,12 +294,12 @@ class Application(AfterHandler, ttk.Frame):
     def run_job(self):
         """Run a job (button press callback)"""
 
-        # Check for existence of genie-ship.exe executable and build
+        # Check for existence of cupcake-ship.exe executable and build
         # if necessary.
         exe = os.path.join(
-            U.ctoaster_jobs, "MODELS", U.ctoaster_version, platform, "ship", "genie.exe"
+            U.ctoaster_jobs, "MODELS", U.ctoaster_version, platform, "ship", "cupcake.exe"
         )
-        runexe = os.path.join(self.job.jobdir, "genie-ship.exe")
+        runexe = os.path.join(self.job.jobdir, "cupcake-ship.exe")
         if not os.path.exists(exe):
             d = BuildExecutableDialog(self, self.job.jobdir)
             if not d.result:
@@ -330,7 +331,7 @@ class Application(AfterHandler, ttk.Frame):
         # running as being in use, which means you can't overwrite it.
         # If you run a job to completion from the GUI, then extend its
         # run length and try to continue it, this means that you can't
-        # update the GENIE executable, as we do above in the line that
+        # update the cTOASTER executable, as we do above in the line that
         # says "shutil.copy(exe, runexe)".  If you try to do that, you
         # get an error saying something like "Text file busy".  The
         # solution is to explicitly clean up these child processes
@@ -345,7 +346,7 @@ class Application(AfterHandler, ttk.Frame):
                 )
                 self.reapable.add(pipe)
             except Exception as e:
-                tkMB.showerror("Error", "Failed to start GENIE executable!")
+                tkMB.showerror("Error", "Failed to start cTOASTER executable!")
 
     def pause_job(self):
         """Pause a running job (button press callback)"""
@@ -381,7 +382,7 @@ class Application(AfterHandler, ttk.Frame):
         self.set_job_buttons()
 
         # Enabled buttons for different states of selected job.
-        state_buttons = {
+        self.state_buttons = {
             "UNCONFIGURED": ["move_rename", "clear_job", "delete_job", "clone_job"],
             "RUNNABLE": [
                 "move_rename",
@@ -607,10 +608,7 @@ class Application(AfterHandler, ttk.Frame):
         udir = os.path.join(U.ctoaster_data, "user-configs")
         for d, ds, fs in os.walk(udir):
             for f in fs:
-                if f.endswith(
-                    ".config"
-                ):  # Assuming you also want to filter for .config files
-                    us.append(os.path.relpath(os.path.join(d, f), udir))
+                us.append(os.path.relpath(os.path.join(d, f), udir))
         self.user_configs = us
         self.user_configs.sort()
 

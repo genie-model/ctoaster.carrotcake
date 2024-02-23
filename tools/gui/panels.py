@@ -18,7 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 #  BASE PANEL CLASS
 #
 
-# A "panel" is a page in the notebook part of the GENIE GUI,
+# A "panel" is a page in the notebook part of the cTOASTER GUI,
 # displaying a particular type of information about a job.  There are
 # a number of different panel classes derived from the base class
 # here.  Each panel is created as a single Ttk frame and added to the
@@ -200,7 +200,7 @@ class NamelistPanel(Panel):
 #
 
 # The output panel consists of a single scrolled text widget to
-# display GENIE model standard output from the currently selected job.
+# display cTOASTER model standard output from the currently selected job.
 # Real-time updates of the text widget are managed by a Tailer object,
 # which is basically just a thing that looks at a file on a regular
 # basis (using a Tkinter "after" timer) to see if there's any new
@@ -213,7 +213,7 @@ class OutputPanel(Panel):
     def __init__(self, notebook, app):
         Panel.__init__(self, notebook, app, "output", "Output")
 
-        self.tailer = None  # The GENIE log file tailer.
+        self.tailer = None  # The cTOASTER log file tailer.
         self.tailer_job = None  # The job that we're currently
         # tailing.
         self.output_text = ""  # Full text in the log text widget.
@@ -262,7 +262,7 @@ class OutputPanel(Panel):
             # Otherwise, start a tailer to follow the contents of the
             # job's run log, using the add_output_text method as the
             # tailer callback to insert text from the log into the
-            # panel's text widget as it's written by GENIE.
+            # panel's text widget as it's written by cTOASTER.
             log = os.path.join(self.job.jobdir, "run.log")
             if not os.path.exists(log):
                 self.add_output_text("", clear=True)
@@ -406,7 +406,7 @@ class PlotPanel(Panel):
         # the file_changed method.
         if self.job and not self.files:
             self.output_files = self.job.check_output_files()
-            self.files = self.output_files.keys()
+            self.files = list(self.output_files.keys())
             if self.files:
                 self.files.sort()
                 self.file_sel.set_menu(self.files[0], *self.files)
@@ -487,7 +487,7 @@ class PlotPanel(Panel):
 # This is the most complicated of the panels.  It has a lot of
 # interactive widgets, displays a lot of information and has some
 # complicated interaction patterns.  Basically though, its purpose is
-# simple: to generate GENIE namelists based on user-selected
+# simple: to generate cTOASTER namelists based on user-selected
 # configuration files, configuration "modifications" and other
 # information.  Much of the complexity stems from the need to support
 # configuration changes when a model run is paused and restarted: the
@@ -768,7 +768,7 @@ class SetupPanel(Panel):
         # other panels.
         self.job.set_status(runlen_increased)
         self.app.tree.item(self.job.jobdir, image=self.job.status_img())
-        for p in self.app.panels.itervalues():
+        for p in self.app.panels.items():
             p.update()
 
         # Update the setup panel state.

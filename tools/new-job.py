@@ -6,7 +6,7 @@ import utils as U
 import config_utils as C
 
 
-# GENIE configuration
+# cTOASTER configuration
 
 if not U.read_ctoaster_config():
     sys.exit('cTOASTER not set up: run the setup-ctoaster script!')

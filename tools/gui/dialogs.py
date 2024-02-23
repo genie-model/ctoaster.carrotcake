@@ -181,7 +181,7 @@ class BuildExecutableDialog(SimpleDialog):
         SimpleDialog.destroy(self)
 
     def body(self, master):
-        msg = "GENIE executable needs to be rebuilt\n\n"
+        msg = "cTOASTER executable needs to be rebuilt\n\n"
         msg += "Please wait..."
         lab = ttk.Label(master, text=msg, font=self.app.bold_font)
         lab.grid(column=0, row=0, pady=5, padx=5, sticky=tk.W + tk.N)
@@ -205,7 +205,7 @@ class BuildExecutableDialog(SimpleDialog):
         self.out_scroll.grid(column=1, row=0, sticky=tk.N + tk.S, pady=5)
 
         self.message("STARTING EXECUTABLE BUILD")
-        go = os.path.join(U.cgenie_root, "tools", "go.py")
+        go = os.path.join(U.ctoaster_root, "tools", "go.py")
         cmd = [sys.executable, "-u", go, "build"]
         model_config = U.ModelConfig("ship", self.dir)
         model_dir = model_config.directory()

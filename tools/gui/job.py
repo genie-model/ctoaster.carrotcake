@@ -44,11 +44,11 @@ def job_status(jd):
     # been configured.
     if not os.path.exists(os.path.join(jd, 'data_genie')): return 'UNCONFIGURED'
 
-    # If there are namelists but no status file written by GENIE, then
+    # If there are namelists but no status file written by cTOASTER, then
     # the job has been configured but not yet run, and is runnable.
     if not os.path.exists(os.path.join(jd, 'status')): return 'RUNNABLE'
 
-    # Otherwise, GENIE will have recorded the job status in the status
+    # Otherwise, cTOASTER will have recorded the job status in the status
     # file.
     return read_status_file(jd)[0]
 
@@ -58,7 +58,7 @@ def job_status_img(s):
     # Icon images for different job statuses.
     global status_images
     if not s in status_images:
-        p = os.path.join(U.cgenie_root, 'tools', 'images',
+        p = os.path.join(U.ctoaster_root, 'tools', 'images',
                          'status-' + s + '.gif')
         status_images[s] = tk.PhotoImage(file=p)
     return status_images[s]
@@ -93,7 +93,7 @@ class Job:
 
         # Here, base_jobdir is the base directory for the hierarchy of
         # jobs in which this job lives (this will normally be
-        # ~/cgenie-jobs or something like that, but there is the
+        # ~/ctoaster-jobs or something like that, but there is the
         # possibility of having multiple job folders to allow for
         # shared libraries of jobs); jobdir is the full path to the
         # job directory; and jobid is the path to the job directory
@@ -221,15 +221,15 @@ class Job:
             with open(os.path.join(self.jobdir, 'config', 'config'), 'w') as fp:
                 if self.base_config:
                     print('base_config_dir:',
-                          os.path.join(U.cgenie_data, 'base-configs'), file=fp)
+                          os.path.join(U.ctoaster_data, 'base-configs'), file=fp)
                     print('base_config:', self.base_config, file=fp)
                 if self.user_config:
                     print('user_config_dir:',
-                          os.path.join(U.cgenie_data, 'user-configs'), file=fp)
+                          os.path.join(U.ctoaster_data, 'user-configs'), file=fp)
                     print('user_config:', self.user_config, file=fp)
                 if self.full_config:
                     print('full_config_dir:',
-                          os.path.join(U.cgenie_data, 'full-configs'), file=fp)
+                          os.path.join(U.ctoaster_data, 'full-configs'), file=fp)
                     print('full_config:', self.full_config, file=fp)
                 if self.restart:
                     print('restart:', self.restart, file=fp)
@@ -247,10 +247,10 @@ class Job:
 
 
     def gen_namelists(self):
-        # Generate GENIE namelists by running new-job script.
+        # Generate cTOASTER namelists by running new-job script.
 
         # Location of the new-job script.
-        new_job = os.path.join(U.cgenie_root, 'tools', 'new-job.py')
+        new_job = os.path.join(U.ctoaster_root, 'tools', 'new-job.py')
 
         # Create command line for running new-job.
         cmd = [new_job, '--gui']
@@ -280,7 +280,7 @@ class Job:
         # Check for output files that could be plotted.  This is
         # needed because it's not immediately clear from the job
         # configuration what files might be available for plotting,
-        # and it's easier just to look and see what GENIE produces and
+        # and it's easier just to look and see what cTOASTER produces and
         # to use these to set up the plotting GUI.
 
         # At the moment, only BIOGEM time series files are considered
@@ -321,7 +321,7 @@ class Job:
     def pct_done(self):
         # Calculate percentage complete for running jobs for status
         # display.  The current timestep and total number of timesteps
-        # are recorded in the GENIE status file for running and paused
+        # are recorded in the cTOASTER status file for running and paused
         # jobs and these are used to calculate the percentage done.
         if not os.path.exists(os.path.join(self.jobdir, 'status')):
             return None
@@ -331,9 +331,9 @@ class Job:
 
 
     def status_params(self):
-        # Return all status parameters written in GENIE status file.
+        # Return all status parameters written in cTOASTER status file.
         # For running, paused and complete jobs, the current and total
-        # timesteps as well as the "GENIE clock" value are written
+        # timesteps as well as the "cTOASTER clock" value are written
         # into the status file to assist in restarting the model after
         # pauses.
         if not os.path.exists(os.path.join(self.jobdir, 'status')):

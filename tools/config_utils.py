@@ -7,7 +7,7 @@ import utils as U
 # Regex for matching floating point values.
 fp_re = '[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?'
 
-# Read and parse a GENIE configuration file.
+# Read and parse a cTOASTER configuration file.
 def read_config(f, msg):
     # Clean string quotes and comments from parameter value.
     def clean(s):
@@ -140,7 +140,7 @@ def timestepping_options(runlen, coords, t100, quiet=False):
     # BIOGEM run length and SEDGEM sediment age.
     for k in ['bg_par_misc_t_runtime', 'sg_par_misc_t_runtime']: res[k] = runlen
 
-    # Overall GENIE run length.
+    # Overall cTOASTER run length.
     for k in ['ma_koverall_total', 'ma_dt_write']: res[k] = runlen * 5 * nsteps
 
     # npstp: 'Health check' frequency (*)

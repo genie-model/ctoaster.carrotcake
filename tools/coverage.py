@@ -9,10 +9,10 @@ import utils as U
 import config_utils as C
 
 
-# GENIE configuration
+# cTOASTER configuration
 
 if not U.read_ctoaster_config():
-    sys.exit('GENIE not set up: run the setup-ctoaster script!')
+    sys.exit('cTOASTER not set up: run the setup-ctoaster script!')
 scons = [os.path.join(U.ctoaster_root, 'tools', 'scons', 'scons.py')]
 if plat.system() == 'Windows': scons = ['python'] + scons
 test_version = U.ctoaster_version
