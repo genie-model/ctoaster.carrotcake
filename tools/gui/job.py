@@ -129,7 +129,7 @@ class Job:
             try:
                 self._read_job_config()
             except Exception as e:
-                print(f"Exception loading job config: {e}")
+                pass
 
     def _read_job_config(self) -> None:
         """
