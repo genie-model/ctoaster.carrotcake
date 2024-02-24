@@ -768,7 +768,8 @@ class SetupPanel(Panel):
         # other panels.
         self.job.set_status(runlen_increased)
         self.app.tree.item(self.job.jobdir, image=self.job.status_img())
-        for p in self.app.panels.items():
+
+        for _, p in self.app.panels.items():
             p.update()
 
         # Update the setup panel state.
