@@ -38,14 +38,16 @@ class TimeSeriesFile:
                 # header and we use it to determine the names of the
                 # variables in the file.
                 header = l.strip().lstrip("%").strip()
-                header = map(lambda s: s.strip(), header.split(" / "))
-                self.vars = tuple(header[1:])
+                header = tuple(
+                    map(lambda s: s.strip(), header.split(" / "))
+                )  # Convert map object to tuple
+                self.vars = header[1:]
 
                 # Initialise empty data vectors for each variable.
                 for v in self.vars:
                     self.data[v] = []
             else:
-                # Process space-seperated data values -- the first is
+                # Process space-separated data values -- the first is
                 # the time, the rest are recorded in the appropriate
                 # data vectors.
                 l = l.strip().split()

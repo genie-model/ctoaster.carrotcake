@@ -265,7 +265,7 @@ class Application(AfterHandler, ttk.Frame):
         # Clear panels: this MUST be done before trying to delete any
         # files so that any data files get closed.  Otherwise Windows
         # won't delete them...
-        for pan in self.panels.items():
+        for _, pan in self.panels.items():
             pan.clear()
 
         # Clean everything up: status, command and log files, model
@@ -297,7 +297,12 @@ class Application(AfterHandler, ttk.Frame):
         # Check for existence of cupcake-ship.exe executable and build
         # if necessary.
         exe = os.path.join(
-            U.ctoaster_jobs, "MODELS", U.ctoaster_version, platform, "ship", "cupcake.exe"
+            U.ctoaster_jobs,
+            "MODELS",
+            U.ctoaster_version,
+            platform,
+            "ship",
+            "cupcake.exe",
         )
         runexe = os.path.join(self.job.jobdir, "cupcake-ship.exe")
         if not os.path.exists(exe):
