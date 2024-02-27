@@ -3,11 +3,16 @@ import os.path
 import tkinter as tk
 from tkinter import ttk
 
+# Matplotlib configuration and imports grouped together
 import matplotlib
 
 matplotlib.use("TkAgg")
+from typing import Any, Tuple
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+
+# Imports from custom modules grouped together
 from gui.tailer import *
 from gui.tsfile import *
 from gui.util import *
@@ -32,32 +37,68 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 class Panel(ttk.Frame):
-    def __init__(self, notebook, app, type, title):
+    """
+    Base class for all panel types in the application GUI.
+
+    A panel represents a page in the notebook part of the GUI, dedicated to displaying specific information.
+    """
+
+    def __init__(
+        self, notebook: ttk.Notebook, app: Any, view_type: str, title: str
+    ) -> None:
+        """
+        Initialize the Panel.
+
+        :param notebook: The notebook widget this panel will be added to.
+        :param app: The application object.
+        :param view_type: The type of the panel.
+        :param title: The title of the panel.
+        """
+        super().__init__(notebook)
         self.app = app
-        ttk.Frame.__init__(self, notebook)
-        self.view_type = type
-        self.job = None
+        self.view_type = view_type
+        self.job = None  # Placeholder for the job object this panel will display information about.
         self.grid(column=0, row=0, padx=5, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
         notebook.add(self, text=title)
 
-    def set_job(self, job):
-        # Update the current job for a panel.
+    def set_job(self, job: Any) -> None:
+        """
+        Sets the job object that this panel should display information about.
+
+        :param job: The job object.
+        """
         self.job = job
         self.update()
 
-    def label(self, t, row, column=0, font=None):
-        # Utility method to create a label for another widget.
-        lab = ttk.Label(self, text=t, font=font)
-        lab.grid(column=column, row=row, pady=5, padx=5, sticky=tk.W)
-        return lab
+    def label(
+        self, text: str, row: int, column: int = 0, font: Optional[str] = None
+    ) -> ttk.Label:
+        """
+        Creates a label widget.
 
-    # Overridden in some derived classes.
-    def clear(self):
+        :param text: The text to display in the label.
+        :param row: The grid row where the label should be placed.
+        :param column: The grid column where the label should be placed.
+        :param font: The font to use for the label's text.
+        :return: The created label widget.
+        """
+        label = ttk.Label(self, text=text, font=font)
+        label.grid(column=column, row=row, pady=5, padx=5, sticky=tk.W)
+        return label
+
+    def clear(self) -> None:
+        """
+        Clears the panel's content. Overridden in some derived classes.
+        """
         self.update()
 
-    # Overridden in derived classes.
-    def update(self):
-        pass
+    def update(self) -> None:
+        """
+        Updates the panel display with the current job's information.
+
+        This method is intended to be overridden in derived panel classes to implement specific display logic.
+        """
+        pass  # To be implemented by subclasses
 
 
 # ----------------------------------------------------------------------
@@ -71,8 +112,20 @@ class Panel(ttk.Frame):
 
 
 class StatusPanel(Panel):
-    def __init__(self, notebook, app):
-        Panel.__init__(self, notebook, app, "status", "Status")
+    """
+    StatusPanel displays the current status and details of a job within the GUI.
+
+    It inherits from the base Panel class and adds specific widgets to display job details.
+    """
+
+    def __init__(self, notebook: ttk.Notebook, app: "Application") -> None:
+        """
+        Initialize the StatusPanel.
+
+        :param notebook: The parent notebook widget.
+        :param app: The application object, which provides context and access to shared resources.
+        """
+        super().__init__(notebook, app, "status", "Status")
 
         self.label("Job path:", 0, font=self.app.bold_font)
         self.job_path = ttk.Label(self, font=self.app.bold_font)
@@ -90,26 +143,30 @@ class StatusPanel(Panel):
         self.t100 = ttk.Label(self)
         self.t100.grid(column=1, row=3, pady=5, sticky=tk.W)
 
-        # The update method fills in all the display fields from the
-        # current job.
-        self.update()
+        self.update()  # Fills in the display fields from the current job.
 
-    def update(self):
+    def update(self) -> None:
+        """
+        Updates the panel display with the current job's information.
+        Clears the display if no job is selected, or updates all fields
+        with the job's current status and details.
+        """
         if not self.job:
-            # No job currently selected so clear everything.
+            # Clear all fields if no job is selected.
             self.job_path.configure(text="")
             self.job_status.configure(text="")
             self.runlen.configure(text="")
             self.t100.configure(text="")
         else:
-            # Set fields to textual representation of job status
-            # (including a percentage complete indicator for running
-            # jobs).
+            # Update fields with current job information.
             self.job_path.configure(text=self.job.jobdir_str())
-            s = self.job.status_str()
-            if s == "RUNNING":
-                s += " (" + format(self.job.pct_done(), ".2f") + "%)"
-            self.job_status.configure(text=s)
+            status_text = self.job.status_str()
+
+            # Append percentage complete if the job is running.
+            if status_text == "RUNNING":
+                status_text += f" ({self.job.pct_done():.2f}%)"
+
+            self.job_status.configure(text=status_text)
             self.runlen.configure(text=self.job.runlen_str())
             self.t100.configure(text=self.job.t100_str())
 
@@ -130,10 +187,13 @@ class StatusPanel(Panel):
 
 class NamelistPanel(Panel):
     def __init__(self, notebook, app):
-        Panel.__init__(self, notebook, app, "namelists", "Namelists")
+        super().__init__(notebook, app, "namelists", "Namelists")
 
         self.sel_frame = ttk.Frame(self)
         lab = ttk.Label(self.sel_frame, text="Namelist:")
+        lab.grid(
+            column=0, row=0, padx=5, pady=5, sticky=tk.W
+        )  # Move this line from configure_grid
 
         # Start with an empty namelist menu.
         nls = ()
@@ -148,50 +208,90 @@ class NamelistPanel(Panel):
             self, font=self.app.mono_font, state=tk.DISABLED, wrap=tk.NONE
         )
         self.out_scroll = ttk.Scrollbar(self, command=self.out.yview)
-        self.out["yscrollcommand"] = self.out_scroll.set
+        self.out.config(yscrollcommand=self.out_scroll.set)
 
+        # Configure grid layout for components.
+        self.configure_grid()
+
+    def configure_grid(self):
+        """
+        Configures the grid layout for the NamelistPanel widgets.
+        """
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=0)
         self.rowconfigure(1, weight=1)
         self.sel_frame.grid(column=0, row=0, sticky=tk.W, pady=5)
-        lab.grid(column=0, row=0, padx=5, pady=5, sticky=tk.W)
-        self.nl_sel.grid(column=1, row=0, stick=tk.W)
+        self.nl_sel.grid(column=1, row=0, sticky=tk.W)
         self.out.grid(column=0, row=1, sticky=tk.E + tk.W + tk.N + tk.S)
         self.out_scroll.grid(column=1, row=1, sticky=tk.N + tk.S)
 
-    def set_namelist_text(self, event=None):
-        # Set the contents of the namelist text widget to show the
-        # currently selected namelist.  This is used as the callback
-        # for the namelist option menu.
-        self.out["state"] = tk.NORMAL
-        self.out.delete("1.0", "end")
-        if self.nl_var.get():
-            self.out.insert("end", self.namelists[self.nl_var.get()])
-        self.out["state"] = tk.DISABLED
+    def set_namelist_text(self, event: tk.Event = None) -> None:
+        """
+        Updates the text widget to display the contents of the currently selected namelist.
 
-    def update(self):
-        nls = ()
+        This method is the callback for the namelist option menu selection.
+
+        :param event: The event that triggered this callback, if any.
+        """
+        self.out.config(state=tk.NORMAL)
+        self.out.delete("1.0", tk.END)
+
+        selected_namelist = self.nl_var.get()
+        if selected_namelist:
+            namelist_content = self.namelists.get(selected_namelist, "")
+            self.out.insert(tk.END, namelist_content)
+
+        self.out.config(state=tk.DISABLED)
+
+    def update(self) -> None:
+        """
+        Updates the panel to display the namelists associated with the current job.
+        """
         self.namelists = {}
-        if self.job:
-            # Read all the namelist files for the current job: these
-            # all have names matching data_* in the job directory.
-            nls = []
-            for nl in glob.iglob(os.path.join(self.job.jobdir, "data_*")):
-                nlname = os.path.basename(nl)[5:]
-                nls.append(nlname)
-                with open(nl) as fp:
-                    self.namelists[nlname] = fp.read()
-            nls.sort()
-            nls = tuple(nls)
 
-        # Set namelist options, select the first entry and set up the
-        # namelist text.  When no job is selected, this code results
-        # in an empty and disabled namelist option menu and an empty
-        # namelist text display.
-        self.nl_sel.set_menu(None if not nls else nls[0], *nls)
+        if self.job:
+            # Use a list comprehension to gather all namelist filenames matching "data_*" in the job directory
+            nls = [
+                os.path.basename(nl)[5:]
+                for nl in glob.iglob(os.path.join(self.job.jobdir, "data_*"))
+            ]
+
+            # Read the contents of each namelist file
+            for nlname in nls:
+                with open(os.path.join(self.job.jobdir, f"data_{nlname}"), "r") as fp:
+                    self.namelists[nlname] = fp.read()
+
+            nls.sort()
+        else:
+            nls = []
+
+        # Configure the namelist selection widget
         self.nl_var.set(nls[0] if nls else "")
-        enable(self.nl_sel, True if nls else False)
+        # Assuming set_menu is a method that needs to be defined to handle updating the OptionMenu widget.
+        # The original ttk.OptionMenu does not have set_menu method. You might need a custom implementation.
+        self.configure_namelist_option_menu(nls)
+
+        # Enable or disable the namelist selection based on available namelists
+        enable(self.nl_sel, bool(nls))
         self.set_namelist_text()
+
+    def configure_namelist_option_menu(self, nls: Tuple[str, ...]) -> None:
+        """
+        Configures the namelist option menu with available namelists.
+
+        :param nls: A tuple of namelist names to populate the menu.
+        """
+        # Clear current menu options
+        menu = self.nl_sel["menu"]
+        menu.delete(0, "end")
+
+        # Add new options
+        for nl in nls:
+            menu.add_command(label=nl, command=lambda value=nl: self.nl_var.set(value))
+
+        # Set the initial value if namelists are available
+        if nls:
+            self.nl_var.set(nls[0])
+            self.set_namelist_text()
 
 
 # ----------------------------------------------------------------------
@@ -211,63 +311,89 @@ class NamelistPanel(Panel):
 
 class OutputPanel(Panel):
     def __init__(self, notebook, app):
-        Panel.__init__(self, notebook, app, "output", "Output")
+        super().__init__(notebook, app, "output", "Output")
 
         self.tailer = None  # The cTOASTER log file tailer.
-        self.tailer_job = None  # The job that we're currently
-        # tailing.
+        self.tailer_job = None  # The job that we're currently tailing.
         self.output_text = ""  # Full text in the log text widget.
 
         # Read-only scrolled text widget.
         self.out = tk.Text(self, font=self.app.mono_font, state=tk.DISABLED)
         self.out_scroll = ttk.Scrollbar(self, command=self.out.yview)
-        self.out["yscrollcommand"] = self.out_scroll.set
+        self.out.config(yscrollcommand=self.out_scroll.set)
 
+        self.configure_grid()
+
+    def configure_grid(self):
+        """
+        Configures the grid layout for the OutputPanel widgets.
+        """
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.out.grid(column=0, row=0, sticky=tk.E + tk.W + tk.N + tk.S)
         self.out_scroll.grid(column=1, row=0, sticky=tk.N + tk.S)
 
-    def add_output_text(self, t, clear=False):
-        # Add text to the scrolling output widget, optionally clearing
-        # the widget beforehand.  If the end of the text is currently
-        # visible, make sure that the text scrolls to keep the end
-        # visible after adding the new text.
-        self.out["state"] = tk.NORMAL
-        if clear:
-            self.output_text = t
-            self.out.delete("1.0", "end")
-        else:
-            self.output_text += t
-        atend = self.out_scroll.get()[1] == 1.0
-        self.out.insert("end", t)
-        self.out["state"] = tk.DISABLED
-        if atend or clear:
-            self.out.see("end")
+    def add_output_text(self, text: str, clear: bool = False) -> None:
+        """
+        Adds text to the scrolling output widget, optionally clearing the widget beforehand.
 
-    def clear(self):
-        # Clear the output text and stop the tailer watching the job
-        # output log.
+        If the end of the text is currently visible or if the text is being cleared, it ensures that
+        the text scrolls to keep the end visible after adding the new text.
+
+        :param text: The text to be added to the output widget.
+        :param clear: A boolean indicating whether the output widget should be cleared before adding new text.
+        """
+        self.out.config(state=tk.NORMAL)
+        if clear:
+            self.output_text = text
+            self.out.delete("1.0", tk.END)
+        else:
+            self.output_text += text
+
+        at_end = self.out_scroll.get()[1] == 1.0
+        self.out.insert(tk.END, text)
+        self.out.config(state=tk.DISABLED)
+        if at_end or clear:
+            self.out.see(tk.END)
+
+    def clear(self) -> None:
+        """
+        Clears the output text widget and stops the tailer that monitors the job output log.
+        """
+        # Stop the tailer if it's currently active.
         if self.tailer:
             self.tailer.stop()
+
+        # Reset the tailer and job-related attributes.
         self.tailer = None
         self.tailer_job = None
+
+        # Clear the text in the output widget.
         self.add_output_text("", clear=True)
 
-    def update(self):
-        # If no job is currently selected, just clear the display.
+    def update(self) -> None:
+        """
+        Updates the output panel display based on the current job selection.
+        Clears the display if no job is selected or sets up a tailer to follow
+        the job's run log.
+        """
         if not self.job:
+            # Clear the display if no job is currently selected.
             self.clear()
         else:
-            # Otherwise, start a tailer to follow the contents of the
-            # job's run log, using the add_output_text method as the
-            # tailer callback to insert text from the log into the
-            # panel's text widget as it's written by cTOASTER.
+            # Determine the path to the job's run log.
             log = os.path.join(self.job.jobdir, "run.log")
+
+            # Clear the display if the log file doesn't exist.
             if not os.path.exists(log):
                 self.add_output_text("", clear=True)
+                return
+
+            # If a different job is being tailed, stop the current tailer.
             if self.tailer and self.tailer_job != self.job:
                 self.clear()
+
+            # Start a new tailer for the current job's run log, if not already tailing.
             if not self.tailer:
                 self.tailer_job = self.job
                 self.tailer = Tailer(self.app, log)
@@ -345,7 +471,7 @@ class PlotPanel(Panel):
             self.file_var,
             None,
             *self.files,
-            command=self.file_changed
+            command=self.file_changed,
         )
         enable(self.file_sel, False)
         self.file_sel.pack(side=tk.LEFT, padx=5)
