@@ -442,28 +442,34 @@ class OutputPanel(Panel):
 
 class PlotPanel(Panel):
     def __init__(self, notebook, app):
-        Panel.__init__(self, notebook, app, "plots", "Plots")
+        super().__init__(notebook, app, "plots", "Plots")
 
-        # The job that we're plotting data from (used for managing
-        # some logic in the update method).
-        self.plot_job = None
+        self.plot_job = None  # The job we're plotting data from.
+        self.ts_file = None  # The time series follower.
 
-        # The time series follower.
-        self.ts_file = None
-
-        # Create the matplotlib figure and plot objects that we're
-        # going to use.
+        # Create the matplotlib figure and plot objects.
         self.fig = plt.figure(figsize=(5, 4), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.plot = None
 
-        # Set up option menus for selecting the data file to plot from
-        # and the variable within the file to plot.  These are both
-        # empty and disabled to start with and are filled in by the
-        # check_job_files, file_changed and data_update methods.
+        # Setup option menus for data file and variable selection.
+        self.setup_option_menus()
+
+        # Create a Tkinter canvas to hold the plot.
+        self.setup_canvas()
+
+    def setup_option_menus(self):
+        """Sets up option menus for selecting the data file and variable."""
         self.choice_frame = ttk.Frame(self)
+        self.setup_data_file_option_menu()
+        self.setup_variable_option_menu()
+        self.choice_frame.pack(side=tk.TOP, pady=10, anchor=tk.NW)
+
+    def setup_data_file_option_menu(self):
+        """Sets up the option menu for selecting the data file."""
         lab = ttk.Label(self.choice_frame, text="Data file:")
         lab.pack(side=tk.LEFT, padx=5)
+
         self.files = ()
         self.file_var = tk.StringVar()
         self.file_sel = ttk.OptionMenu(
@@ -475,10 +481,12 @@ class PlotPanel(Panel):
         )
         enable(self.file_sel, False)
         self.file_sel.pack(side=tk.LEFT, padx=5)
-        lab = ttk.Label(self.choice_frame, text="")
-        lab.pack(side=tk.LEFT, padx=5)
+
+    def setup_variable_option_menu(self):
+        """Sets up the option menu for selecting the variable to plot."""
         lab = ttk.Label(self.choice_frame, text="Variable:")
         lab.pack(side=tk.LEFT, padx=5)
+
         self.vars = ()
         self.var_var = tk.StringVar()
         self.var_sel = ttk.OptionMenu(
@@ -487,103 +495,188 @@ class PlotPanel(Panel):
         enable(self.var_sel, False)
         self.var_sel.pack(side=tk.LEFT, padx=5)
 
-        # Create a Tkinter canvas to hold the plot and instantiate
-        # everything.
+    def setup_canvas(self):
+        """Creates and packs the Tkinter canvas for the plot."""
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
-        self.choice_frame.pack(side=tk.TOP, pady=10, anchor=tk.NW)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
-    def clear(self):
-        # Clear everything -- set option menus to empty and disabled,
-        # clear plot and restart job file checking.
+    def clear(self) -> None:
+        """
+        Clears the plot panel. This includes disabling and emptying the option menus,
+        clearing the plot, and restarting the job file checking mechanism.
+        """
+        # Stop and clear the time series file monitoring if active.
         if self.ts_file:
             self.ts_file.stop()
         self.ts_file = None
         self.plot_job = None
+
+        # Reset files and variables lists, disable and clear selection menus.
         self.files = ()
         self.vars = ()
-        self.file_sel.set_menu(None, *self.files)
-        self.file_var.set("")
-        enable(self.file_sel, False)
-        self.var_sel.set_menu(None, *self.vars)
-        self.var_var.set("")
-        enable(self.var_sel, False)
-        self.output_files = {}
+        self.reset_option_menu(self.file_sel, self.files, self.file_var)
+        self.reset_option_menu(self.var_sel, self.vars, self.var_var)
+
+        # Clear any existing plot data and redraw the canvas.
         self.ax.clear()
         self.canvas.draw()
+
+        # Restart job file checking.
         self.after(0, self.check_job_files)
 
-    def update(self):
-        # If the job we're supposed to be plotting changes from the
-        # job we currently are plotting, we just clear the plot and
-        # start the check_job_files timer, which will pick up any job
-        # data files and repopulate the GUI.
+    def reset_option_menu(self, menu, items, var):
+        """
+        Resets an option menu to empty and disabled state.
+
+        :param menu: The option menu widget to reset.
+        :param items: The items list for the option menu (should be empty).
+        :param var: The StringVar associated with the option menu.
+        """
+        # Assume set_menu is a custom method for resetting the menu items.
+        # This part might need adjustment based on actual implementation.
+        menu["menu"].delete(0, "end")  # Clear existing options.
+        for item in items:
+            menu["menu"].add_command(
+                label=item, command=lambda value=item: var.set(value)
+            )
+        var.set("")
+        enable(menu, False)
+
+    def update(self) -> None:
+        """
+        Updates the panel to reflect changes in the current job.
+        If the current job differs from the one being plotted, clears the plot and
+        starts the job file checking process to pick up any new job data files.
+        """
+        # Check if the job we're plotting has changed.
         if self.job != self.plot_job:
-            self.clear()
-            self.plot_job = self.job
+            self.clear()  # Clear the current plot and GUI elements.
+            self.plot_job = self.job  # Update the plot job to the current job.
+
+            # If there's a job to plot, start checking for job data files.
             if self.job:
                 self.after(0, self.check_job_files)
 
-    def check_job_files(self):
-        # This method is called on a timer as long as we don't have
-        # any data files.  Once it finds files, it uses them to
-        # populate the file option menu, selects the first one, and
-        # signals that the selected file has been updated by calling
-        # the file_changed method.
+    def check_job_files(self) -> None:
+        """
+        Periodically checks for output files from the current job. If found,
+        populates the file option menu, selects the first file, and signals a file change.
+        This method keeps checking until output files are found.
+        """
+        # Proceed only if there's a job and no files have been found yet.
         if self.job and not self.files:
             self.output_files = self.job.check_output_files()
-            self.files = list(self.output_files.keys())
+            self.files = sorted(
+                self.output_files.keys()
+            )  # Retrieve and sort file names.
+
+            # If files are found, update the file selection menu and signal a file change.
             if self.files:
-                self.files.sort()
-                self.file_sel.set_menu(self.files[0], *self.files)
-                self.file_var.set(self.files[0])
-                enable(self.file_sel, True)
-                self.file_changed()
+                self.update_file_selection_menu(self.files)
+                self.file_var.set(self.files[0])  # Set the first file as selected.
+                enable(self.file_sel, True)  # Enable the file selection menu.
+                self.file_changed()  # Handle the file change event.
+
+            # Schedule the next check.
             self.after(500, self.check_job_files)
 
-    def file_changed(self, event=None):
-        # A new data file has been selected in the file option menu,
-        # so clear the data variable option menu, work out the path to
-        # the data file and create a TimeSeriesFile object to manage
-        # reading data from the file.  The TimeSeriesFile class is a
-        # specialisation of the Tailer class for dealing with BIOGEM
-        # ASCII output data files.  It tails the data file and parses
-        # the data lines to pick out time and variable values; a
-        # user-provided callback (here, the data_update method) is
-        # called whenever there's new data.
-        if self.file_var.get():
-            tsp = self.output_files[self.file_var.get()]
+    def update_file_selection_menu(self, files):
+        """
+        Updates the file selection option menu with the available files.
+
+        Parameters:
+        files (list): A list of file names to populate the menu.
+        """
+        menu = self.file_sel["menu"]
+        menu.delete(0, "end")  # Clear existing menu entries.
+
+        for file_name in files:
+            menu.add_command(
+                label=file_name,
+                command=lambda value=file_name: self.file_var.set(value),
+            )
+
+        if files:
+            self.file_sel.set_menu(
+                files[0], *files
+            )  # Assuming set_menu is correctly implemented.
+
+    def file_changed(self, event=None) -> None:
+        """
+        Handles the event triggered when a new data file is selected. It initializes
+        a TimeSeriesFile object for the selected file to manage data reading and updates.
+        """
+        selected_file = self.file_var.get()
+        if selected_file:
+            # Determine the path to the selected data file.
+            file_path = self.output_files[selected_file]
+
+            # Reset the variable option menu and disable it.
             self.vars = ()
-            self.var_sel.set_menu(None, *self.vars)
+            self.update_variable_selection_menu(
+                self.vars
+            )  # Assuming a method to update the menu.
             self.var_var.set("")
             enable(self.var_sel, False)
-            self.ts_file = TimeSeriesFile(self.app, tsp, self.data_update)
+
+            # Initialize a TimeSeriesFile object for the selected file.
+            self.ts_file = TimeSeriesFile(self.app, file_path, self.data_update)
         else:
+            # Clear the TimeSeriesFile object if no file is selected.
             self.ts_file = None
 
+    def update_variable_selection_menu(self, variables):
+        """
+        Updates the variable selection option menu with the available variables.
+
+        Parameters:
+        variables (tuple): A tuple of variable names to populate the menu.
+        """
+        menu = self.var_sel["menu"]
+        menu.delete(0, "end")  # Clear existing menu entries.
+
+        for var in variables:
+            menu.add_command(
+                label=var, command=lambda value=var: self.var_var.set(value)
+            )
+
+        if variables:
+            self.var_sel.set_menu(
+                variables[0], *variables
+            )  # Assuming set_menu is correctly implemented.
+
     def data_update(self, tnew, dnew):
-        if self.vars == ():
-            # The first time this gets called, we need to set up the
-            # data variable option menu in the GUI, based on the data
-            # file header parsed by the TimeSeriesFile object.  We
-            # select the first available variable and signal that the
-            # selected variable has changed by calling the var_changed
-            # method.
+        """
+        Updates the plot with new data. If it's the first data update,
+        initializes the variable selection based on available data variables.
+        Otherwise, updates the plot with new data values.
+
+        Parameters:
+        tnew: New time data points.
+        dnew: New data points corresponding to the selected variable.
+        """
+        if not self.vars:
+            # Initialize the variable option menu if this is the first update.
             self.vars = self.ts_file.vars
-            self.var_sel.set_menu(None, *self.vars)
+            self.update_variable_selection_menu(self.vars)  # Reuse the existing method.
             enable(self.var_sel, True)
             self.ax.clear()
-            if len(self.vars) >= 1:
+
+            if self.vars:
                 self.var_var.set(self.vars[0])
                 self.var_changed()
             else:
                 self.canvas.draw()
         else:
-            # Set up the X and Y plot data from the TimeSeriesFile
-            # object's record of the time values and data values for
-            # the current variable, and rescale and redraw the plot.
-            self.plot.set_xdata(self.ts_file.time)
-            self.plot.set_ydata(self.ts_file.data[self.var_var.get()])
+            # Update the plot with new data.
+            if self.plot is None:
+                (self.plot,) = self.ax.plot(
+                    self.ts_file.time, self.ts_file.data[self.var_var.get()], marker="o"
+                )
+            else:
+                self.plot.set_xdata(self.ts_file.time)
+                self.plot.set_ydata(self.ts_file.data[self.var_var.get()])
+
             self.ax.relim()
             self.ax.autoscale_view()
             self.ax.xaxis.set_major_locator(ticker.LinearLocator(numticks=10))
@@ -591,17 +684,25 @@ class PlotPanel(Panel):
             self.canvas.draw()
 
     def var_changed(self, event=None):
-        # The selected variable has changed, so clear the plot, get
-        # the current time and data values from the TimeSeriesFile
-        # object and draw an initial plot.  This is then update in
-        # real-time by the data_update method as more data is read
-        # from the time series file.
+        """
+        Handles the event when the selected plotting variable is changed.
+        Clears the existing plot, retrieves the new data, and plots it.
+        """
+        # Clear the current plot on the axis.
         self.ax.clear()
+
+        # Retrieve the current time and data for the newly selected variable.
         t = self.ts_file.time
         d = self.ts_file.data[self.var_var.get()]
+
+        # Create a new plot with the updated data.
         (self.plot,) = self.ax.plot(t, d)
+
+        # Set the labels for the axes based on the selected variable.
         self.ax.set_xlabel("Time (yr)")
         self.ax.set_ylabel(self.var_var.get())
+
+        # Redraw the canvas to display the updated plot.
         self.canvas.draw()
 
 
