@@ -57,6 +57,10 @@ class TimeSeriesFile:
                 tnew.append(l[0])
                 dnew.append(l[1:])
 
+        # Sort data values within each variable
+        for var_name, data_list in self.data.items():
+            self.data[var_name] = sorted(data_list)  # Sort data for each variable
+
         # Call the callback with the new data -- the callback can also
         # access the full time and data vectors directly.
         self.cb(tnew, dnew)
