@@ -282,6 +282,11 @@ class NamelistPanel(Panel):
         """
         Updates the panel to display the namelists associated with the current job.
         """
+
+    def update(self) -> None:
+        """
+        Updates the panel to display the namelists associated with the current job.
+        """
         self.namelists = {}
 
         if self.job:
@@ -300,14 +305,30 @@ class NamelistPanel(Panel):
         else:
             nls = []
 
-        # Configure the namelist selection widget
-        self.nl_var.set(nls[0] if nls else "")
-        # Assuming set_menu is a method that needs to be defined to handle updating the OptionMenu widget.
-        # The original ttk.OptionMenu does not have set_menu method. You might need a custom implementation.
-        self.configure_namelist_option_menu(nls)
+        # Update the namelist option menu
+        menu = self.nl_sel["menu"]
+        menu.delete(0, "end")
+
+        for nl in nls:
+            menu.add_command(
+                label=nl, command=lambda value=nl: self.set_namelist(value)
+            )
 
         # Enable or disable the namelist selection based on available namelists
         enable(self.nl_sel, bool(nls))
+
+        # Set the initial value if namelists are available and the current value is not in the updated list
+        if nls and self.nl_var.get() not in nls:
+            self.nl_var.set(nls[0])
+            self.set_namelist_text()
+
+    def set_namelist(self, namelist: str) -> None:
+        """
+        Sets the currently selected namelist and updates the text widget.
+
+        :param namelist: The name of the selected namelist.
+        """
+        self.nl_var.set(namelist)
         self.set_namelist_text()
 
     def configure_namelist_option_menu(self, nls: Tuple[str, ...]) -> None:
