@@ -1,13 +1,12 @@
-from __future__ import print_function
-import os, os.path, sys, errno, shutil, datetime
-import optparse
+import os, sys, errno, shutil, datetime
+import argparse
 import subprocess as sp
 
 import utils as U
 import config_utils as C
 
 
-# GENIE configuration
+# cTOASTER configuration
 
 if not U.read_ctoaster_config():
     sys.exit('cTOASTER not set up: run the setup-ctoaster script!')
@@ -15,56 +14,55 @@ if not U.read_ctoaster_config():
 
 # Command line arguments.
 
-parser = optparse.OptionParser(usage='new-job [options] job-name run-length',
-                               description='Configure cTOASTER jobs')
-parser.add_option('-O', '--overwrite',     help='Overwrite existing job',
-                  action='store_true')
-parser.add_option('-b', '--base-config',   help='Base configuration name')
-parser.add_option('-u', '--user-config',   help='User configuration name')
-parser.add_option('-m', '--config-mods',   help='Configuration mods filename')
-parser.add_option('-c', '--config',        help='Full configuration name')
-parser.add_option('-r', '--restart',       help='Restart name')
-parser.add_option('--old-restart',         help='Restart from old ctoaster job',
-                  action='store_true')
-parser.add_option('--t100',                help='Use "T100" timestepping',
-                  action='store_true')
-parser.add_option('-t', '--test-job',      help='Set up from test')
-parser.add_option('-j', '--job-dir',       help='Alternative job directory',
-                  default=U.ctoaster_jobs)
-parser.add_option('-v', '--model-version', help='Model version to use',
-                  default = U.ctoaster_version)
-parser.add_option('-g', '--gui', action='store_true',
-                  help=optparse.SUPPRESS_HELP)
-opts, args = parser.parse_args()
-if not opts.test_job and len(args) != 2 or opts.test_job and len(args) != 0:
+parser = argparse.ArgumentParser(description='Configure cTOASTER jobs')
+parser.add_argument('job_name', nargs='?', help='Job name')
+parser.add_argument('run_length', nargs='?', type=int, help='Run length')
+parser.add_argument('-O', '--overwrite', action='store_true', help='Overwrite existing job')
+parser.add_argument('-b', '--base-config', help='Base configuration name')
+parser.add_argument('-u', '--user-config', help='User configuration name')
+parser.add_argument('-m', '--config-mods', help='Configuration mods filename')
+parser.add_argument('-c', '--config', help='Full configuration name')
+parser.add_argument('-r', '--restart', help='Restart name')
+parser.add_argument('--old-restart', action='store_true', help='Restart from old ctoaster job')
+parser.add_argument('--t100', action='store_true', help='Use "T100" timestepping')
+parser.add_argument('-t', '--test-job', help='Set up from test')
+parser.add_argument('-j', '--job-dir', help='Alternative job directory', default=U.ctoaster_jobs)
+parser.add_argument('-v', '--model-version', help='Model version to use', default=U.ctoaster_version)
+parser.add_argument('-g', '--gui', action='store_true', help=argparse.SUPPRESS)
+
+args = parser.parse_args()
+
+# Validate the number of positional arguments based on whether test_job is specified
+if not args.test_job and not (args.job_name and args.run_length is not None) or \
+   args.test_job and (args.job_name or args.run_length is not None):
     parser.print_help()
     sys.exit()
-if len(args) == 2:
-    job_name = args[0]
-    run_length = int(args[1])
-else:
-    job_name = opts.test_job
-running_from_gui = opts.gui
-overwrite = opts.overwrite
-base_config = opts.base_config
-user_config = opts.user_config
-config_mods = opts.config_mods
-full_config = opts.config
-restart = opts.restart
-test_job = opts.test_job
-old_restart = True if opts.old_restart else False
-t100 = True if opts.t100 else False
-job_dir_base = opts.job_dir
-model_version = opts.model_version
 
+# Assign values from args
+job_name = args.job_name if not args.test_job else args.test_job
+run_length = args.run_length
+running_from_gui = args.gui
+overwrite = args.overwrite
+base_config = args.base_config
+user_config = args.user_config
+config_mods = args.config_mods
+full_config = args.config
+restart = args.restart
+test_job = args.test_job
+old_restart = args.old_restart
+t100 = args.t100
+job_dir_base = args.job_dir
+model_version = args.model_version
 
+# Check if the model version exists
 if model_version not in U.available_versions():
-    sys.exit('Model version "' + model_version + '" does not exist')
+    sys.exit(f'Model version "{model_version}" does not exist')
+
 
 
 def error_exit(msg):
     if running_from_gui:
-        sys.exit('ERR:' + msg)
+        sys.exit(f'ERR:{msg}')
     else:
         sys.exit(msg)
 
@@ -87,18 +85,17 @@ if model_version != repo_version:
 
 base_and_user_config = base_config and user_config
 if not base_and_user_config and not full_config and not test_job:
-    error_exit('Either base and user, full configuration ' +
-               'or test must be specified')
+    error_exit('Either base and user, full configuration or test must be specified')
 if not base_and_user_config and config_mods:
-    error_exit('Configuration mods can only be specified if ' +
-               'using base and user configuration')
+    error_exit('Configuration mods can only be specified if using base and user configuration')
+
 nset = 0
 if base_and_user_config: nset += 1
 if full_config:          nset += 1
 if test_job:             nset += 1
 if nset > 1:
-    error_exit('Only one of base and user, full configuration ' +
-               'or test may be specified')
+    error_exit('Only one of base and user, full configuration, or test may be specified')
+
 
 
 # 
@@ -107,44 +104,47 @@ if test_job:
     test_dir = os.path.join(U.ctoaster_test, test_job)
     with open(os.path.join(test_dir, 'test_info')) as fp:
         for line in fp:
-            ss = line.split(':')
-            k = ss[0].strip()
-            v = ':'.join(ss[1:]).strip()
-            if k == 'restart_from': restart = v
-            elif k == 'run_length': run_length = int(v)
-            elif k == 't100': t100 = True if v == 'True' else False
+            k, _, v = line.partition(':')
+            k = k.strip()
+            v = v.strip()
+            if k == 'restart_from':
+                restart = v
+            elif k == 'run_length':
+                run_length = int(v)
+            elif k == 't100':
+                t100 = v == 'True'
+
 
 
 # Check for existence of any restart job.
 
 if restart:
     if old_restart:
-        restart_path = os.path.join(os.path.expanduser('~/ctoaster_output'),
-                                    restart)
+        restart_path = os.path.join(os.path.expanduser('~/ctoaster_output'), restart)
     elif os.path.exists(restart):
         restart_path = restart
     else:
         restart_path = os.path.join(job_dir_base, restart, 'output')
     if not os.path.exists(restart_path):
-        if old_restart:
-            error_exit('Old ctoaster restart job "' + restart +
-                       '" does not exist')
-        else:
-            error_exit('Restart job "' + restart + '" does not exist')
-
+        error_msg = f'Old ctoaster restart job "{restart}" does not exist' if old_restart else f'Restart job "{restart}" does not exist'
+        error_exit(error_msg)
 
 # All set up.  Off we go...
 
 if not running_from_gui:
-    print('   Job name:', job_name + (' [TEST]' if test_job else ''))
+    print(f'   Job name: {job_name} {" [TEST]" if test_job else ""}')
     if base_and_user_config:
-        print('Base config:', base_config)
-        print('User config:', user_config)
-    if config_mods: print('Config mods:', config_mods)
-    if full_config: print('Full config:', full_config)
-    if not test_job: print(' Run length:', run_length)
-    print('  Overwrite:', overwrite)
-    print('      Model:', model_version)
+        print(f'Base config: {base_config}')
+        print(f'User config: {user_config}')
+    if config_mods: 
+        print(f'Config mods: {config_mods}')
+    if full_config: 
+        print(f'Full config: {full_config}')
+    if not test_job: 
+        print(f' Run length: {run_length}')
+    print(f'  Overwrite: {overwrite}')
+    print(f'      Model: {model_version}')
+
 
 
 # Read and parse configuration files.
@@ -217,7 +217,7 @@ modules = list(map(C.module_from_flagname, mod_flags))
 # Set up job directory and per-module sub-directories.
 
 def safe_mkdir(p):
-    if not os.path.exists(p): os.makedirs(p)
+    os.makedirs(p, exist_ok=True)  # Ensures directory is created without raising an error if it already exists
 
 job_dir = os.path.join(job_dir_base, job_name)
 if not running_from_gui:
@@ -241,24 +241,30 @@ except Exception as e:
 
 cfg_dir = os.path.join(job_dir, 'config')
 if not running_from_gui:
-    os.mkdir(cfg_dir)
+    # Check if cfg_dir exists and overwrite flag is True, then remove it
+    if os.path.exists(cfg_dir) and overwrite:
+        shutil.rmtree(cfg_dir)
+    # Now, safely create the cfg_dir as it's either new or has been cleared
+    os.makedirs(cfg_dir, exist_ok=True)  # Use exist_ok to avoid error if the directory was just deleted and recreated
+
     if not test_job:
         with open(os.path.join(cfg_dir, 'config'), 'w') as fp:
             if base_config:
-                print('base_config_dir:', base_config_dir, file=fp)
-                print('base_config:', base_config, file=fp)
+                print(f'base_config_dir: {base_config_dir}', file=fp)
+                print(f'base_config: {base_config}', file=fp)
             if user_config:
-                print('user_config_dir:', user_config_dir, file=fp)
-                print('user_config:', user_config, file=fp)
+                print(f'user_config_dir: {user_config_dir}', file=fp)
+                print(f'user_config: {user_config}', file=fp)
             if full_config:
-                print('full_config_dir:', full_config_dir, file=fp)
-                print('full_config:', full_config, file=fp)
+                print(f'full_config_dir: {full_config_dir}', file=fp)
+                print(f'full_config: {full_config}', file=fp)
             if config_mods:
-                print('config_mods:', config_mods, file=fp)
-            print('config_date:', str(datetime.datetime.today()), file=fp)
-            print('run_length:', run_length, file=fp)
-            print('t100:', t100, file=fp)
-            if restart: print('restart:', restart, file=fp)
+                print(f'config_mods: {config_mods}', file=fp)
+            print(f'config_date: {datetime.datetime.today()}', file=fp)
+            print(f'run_length: {run_length}', file=fp)
+            print(f't100: {t100}', file=fp)
+            if restart: 
+                print(f'restart: {restart}', file=fp)
 
 if test_job:
     shutil.copyfile(os.path.join(test_dir, 'test_info'),
@@ -313,10 +319,9 @@ if len(configs) > 1:
 with open(os.path.join(cfg_dir, 'model-version'), 'w') as fp:
     if model_version == 'DEVELOPMENT':
         try:
-            with open(os.devnull, 'w') as sink:
-                rev = sp.check_output(['git', 'describe',
-                                       '--tags', 'HEAD'], stderr=sink).strip()
-            print('DEVELOPMENT:' + rev, file=fp)
+            result = sp.run(['git', 'describe', '--tags', 'HEAD'], capture_output=True, text=True, check=True)
+            rev = result.stdout.strip()
+            print(f'DEVELOPMENT:{rev}', file=fp)
         except:
             print('DEVELOPMENT:UNKNOWN', file=fp)
     else:

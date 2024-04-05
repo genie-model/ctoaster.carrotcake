@@ -1,4 +1,5 @@
 # Fortran 90 platform definitions.
+
 f90 = {
     # Compiler name.
     'compiler': 'gfortran',
@@ -6,10 +7,11 @@ f90 = {
     # Default flags.
     'baseflags': ['-x', 'f95-cpp-input', '-ffree-line-length-none',
                   '-fno-automatic', '-fimplicit-none', '-fdefault-real-8',
-                  '-msse' ],
+                  '-mtune=native',
+                  '-Wall' ],
 
     # Debug flags.
-    'debug': ['-g'],
+    'debug': ['-g', '-ffpe-trap=invalid,overflow'],
 
     # Optimisation flags.
     'ship': ['-O3', '-funroll-loops'],
@@ -21,21 +23,58 @@ f90 = {
     # Bounds checking flags ("bounds" build type).
     'bounds': ['-fbounds-check'],
 
+    # Test coverage analysis.
+    'coverage': ['-O0', '--coverage'],
+    'coverage_link': ['--coverage'],
+
     # Miscellaneous flags.
     'include': '-I',         # Include files.
     'module_dir': '-J',      # Module file output directory.
     'define': '-D'           # Preprocessor definitions.
 }
 
+
 # Platform runtime environment variables.
+
 runtime_env = { 'GFORTRAN_UNBUFFERED_PRECONNECTED': '1' }
 
+
 # NetCDF platform definitions.
+#
+# The Ubuntu package 'libnetcdff-dev' installs into:
+# - /usr/include/netcdf.mod, and
+# - /usr/lib/x86_64-linux-gnu/libntecdff.a
+# Whereas the EPEL package 'netcdf-fortran-devel.x86_64' installs into:
+# - /usr/lib64/gfortran/modules/netcdf.mod, and
+# - /usr/lib64/libnetcdff.so
+#
+netcdf_base = None  # Store as a pair (tuple) of include and lib paths as distros subvert a simple tree
+#
+# Add any additional paths in the form [('includepath','libpath')]
+# For example if you have installed the NetCDF libraries yourself under /home/youruser/netcdf
+# you should add ('home/youruser/netcdf/include','/home/youruser/netcdf/lib') to the list below:
+#
+poss_netcdf = [('/usr/include','/usr/lib/x86_64-linux-gnu'), ('/usr/lib64/gfortran/modules','/usr/lib64')]
+
+for poss in poss_netcdf:
+    if (os.path.exists(os.path.join(poss[0], 'netcdf.mod')) and
+        glob.glob(os.path.join(poss[1], 'libnetcdf.*'))):
+        netcdf_base = poss
+        break
+if not netcdf_base:
+    sys.exit('Could not find a valid NetCDF installation')
+
+if (glob.glob(os.path.join(netcdf_base[1], 'libnetcdff*')) and
+    glob.glob(os.path.join(netcdf_base[1], 'libnetcdf*'))):
+    netcdf_libs = ['netcdf', 'netcdff']
+else:
+    netcdf_libs = ['netcdf']
+
 netcdf = {
     # NetCDF base directory.
-    'base': [('/usr/local/include'), ('/usr/local/lib')],
+    'base': netcdf_base,
 
     # NetCDF libraries (either a single 'netcdf', or 'netcdf' and
     # 'netcdff' if the F90 library is split).
-    'libs': ['netcdf', 'netcdff']
+    'libs': netcdf_libs
 }

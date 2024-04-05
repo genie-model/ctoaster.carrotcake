@@ -1,6 +1,5 @@
-from __future__ import print_function
-import os, os.path, sys, errno, shutil, glob, re
-import optparse
+import os, sys, errno, shutil, glob, re
+import argparse  # Replacing optparse for Python 3
 import subprocess as sp
 import datetime as dt
 import ctypes as ct
@@ -14,9 +13,13 @@ import config_utils as C
 
 if not U.read_ctoaster_config():
     sys.exit('cTOASTER not set up: run the setup-ctoaster script!')
-###scons = [os.path.join(U.ctoaster_root, 'tools', 'scons', 'scons.py')]
-scons = 'scons'
-if plat.system() == 'Windows': scons = ['python'] + scons
+
+# Adjusting scons command for cross-platform compatibility
+scons_command = 'scons'
+if plat.system() == 'Windows':
+    scons_command = ['python', os.path.join(U.ctoaster_root, 'tools', 'scons', 'scons.py')]
+else:
+    scons_command = [scons_command]
 nccompare = os.path.join(U.ctoaster_root, 'build', 'nccompare.exe')
 test_version = U.ctoaster_version
 
@@ -61,57 +64,63 @@ def add_test(test_job, test_name, restart):
             if fs != []: return True
         return False
 
-    # Check for existence of required jobs, tests and directories.
+    # Check for existence of required jobs, tests, and directories.
     job_dir = os.path.join(U.ctoaster_jobs, test_job)
-    if not has_job_output(job_dir):
-        sys.exit('Need to run job "' + test_job +
-                 '" before adding it as a test')
     test_dir = os.path.join(U.ctoaster_test, test_name)
+
+    # Check job directory existence and output
+    if not has_job_output(job_dir):
+        sys.exit(f'Need to run job "{test_job}" before adding it as a test')
     if not os.path.exists(job_dir):
-        sys.exit('Job "' + test_job + '" does not exist')
-    if os.path.exists(test_dir): sys.exit('Test already exists!')
+        sys.exit(f'Job "{test_job}" does not exist')
+    if os.path.exists(test_dir):
+        sys.exit('Test already exists!')
+
+    # Check restart test directory if restart is specified
     if restart:
         restart_test_dir = os.path.join(U.ctoaster_test, restart)
         if not os.path.exists(restart_test_dir):
-            sys.exit('Restart test "' + restart + '" does not exist')
+            sys.exit(f'Restart test "{restart}" does not exist')
 
     # Set up test directory and copy configuration files.
-    os.makedirs(test_dir)
-    shutil.copy(os.path.join(job_dir, 'config', 'config'),
-                os.path.join(test_dir, 'test_info'))
+    os.makedirs(test_dir, exist_ok=True)
+    shutil.copy(os.path.join(job_dir, 'config', 'config'), os.path.join(test_dir, 'test_info'))
+
     if restart:
         with open(os.path.join(test_dir, 'test_info'), 'a') as fp:
-            print('restart_from: ' + restart, file=fp)
+            print(f'restart_from: {restart}', file=fp)
     for c in ['full_config', 'base_config', 'user_config']:
-        if os.path.exists(os.path.join(job_dir, 'config', c)):
-            shutil.copy(os.path.join(job_dir, 'config', c), test_dir)
+        config_path = os.path.join(job_dir, 'config', c)
+        if os.path.exists(config_path):
+            shutil.copy(config_path, test_dir)
 
     # Ask user which output files to use for comparison and copy them
     # to the test "knowngood" directory.
     print('Selecting output files for test comparison:')
     srcdir = os.path.join(job_dir, 'output')
     dstdir = os.path.join(test_dir, 'knowngood')
-    os.chdir(srcdir)
-    for subd in glob.iglob('*'):
-        fs = []
-        if subd in select_defaults:
-            fs = select_defaults[subd](subd)
-        else:
-            fs = nc_defaults(subd)
-        print('  ' + subd + ' defaults: ' +
-              ('NONE' if fs == [] else ' '.join(map(os.path.basename, fs))))
-        accept_defaults = raw_input('    Accept defaults? [Yn]: ').strip()
-        if accept_defaults != '' and accept_defaults.lower() != 'y':
-            fs = []
-            for f in glob.iglob(os.path.join(subd, '*')):
-                yn = raw_input('    ' + f + ' [yN]: ').strip()
-                if yn.lower() == 'y': fs.append(f)
-        for f in fs:
-            src = os.path.join(srcdir, f)
-            dst = os.path.join(dstdir, f)
-            if not os.path.exists(os.path.dirname(dst)):
-                os.makedirs(os.path.dirname(dst))
-            shutil.copyfile(src, dst)
+    os.makedirs(dstdir, exist_ok=True)  # Ensure destination directory exists
+
+    for subd in glob.iglob(os.path.join(srcdir, '*')):
+        if os.path.isdir(subd):
+            subd_name = os.path.basename(subd)
+            fs = select_defaults[subd_name](subd_name) if subd_name in select_defaults else nc_defaults(subd_name)
+            print(f'  {subd_name} defaults: {"NONE" if not fs else " ".join(map(os.path.basename, fs))}')
+            
+            accept_defaults = input('    Accept defaults? [Y/n]: ').strip().lower()
+            if accept_defaults not in ('', 'y'):
+                fs = []
+                for f in glob.iglob(os.path.join(subd, '*')):
+                    yn = input(f'    Include {os.path.basename(f)}? [y/N]: ').strip().lower()
+                    if yn == 'y':
+                        fs.append(f)
+            
+            for f in fs:
+                dst_subdir = os.path.join(dstdir, os.path.relpath(os.path.dirname(f), srcdir))
+                os.makedirs(dst_subdir, exist_ok=True)
+                shutil.copy(f, dst_subdir)
+                print(f'Copied {f} to {dst_subdir}')
+
 
 
     # Copy restart files if they exist and we aren't restarting from
@@ -133,22 +142,19 @@ reltol = 35
 
 
 # Make sure that the nccompare tool is available.
-
 def ensure_nccompare():
     if os.path.exists(nccompare): return
-    cmd = [scons, '-C', U.ctoaster_root, os.path.join('build', 'nccompare.exe')]
-    sp.call(cmd)
-    with open(os.devnull, 'w') as sink:
-        status = sp.call(cmd, stdout=sink, stderr=sink)
-    if status != 0:
+    cmd = ['scons', '-C', U.ctoaster_root, os.path.join('build', 'nccompare.exe')]
+    result = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, text=True)
+    if result.returncode != 0:
         sys.exit('Could not build nccompare.exe program')
 
 
 # Compare NetCDF files.
-
 def compare_nc(f1, f2, logfp):
     cmd = [nccompare, '-v', '-a', str(abstol), '-r', str(reltol), f1, f2]
-    return sp.call(cmd, stdout=logfp, stderr=logfp)
+    result = sp.run(cmd, stdout=logfp, stderr=logfp, text=True)
+    return result.returncode
 
 
 # "Dawson" float comparison.
@@ -167,52 +173,38 @@ fpline_re_str = '^(' + fp_re_str + ')((\s*,\s*|\s+)' + fp_re_str + ')*$'
 fpline_re = re.compile(fpline_re_str)
 
 def compare_ascii(f1, f2, logfp):
-    with open(f1) as fp1, open(f2) as fp2:
-        l1 = 'dummy'
-        l2 = 'dummy'
-        while l1 != '' and l2 != '':
-            l1 = fp1.readline().strip()
-            l2 = fp2.readline().strip()
-            # If the lines match, carry on.
-            if l1 == l2: continue
-            # If both lines are comma or space seperated strings of
-            # floating point numbers, then extract the numbers for
-            # comparison.
-            m1 = fpline_re.match(l1)
-            m2 = fpline_re.match(l2)
-            if not m1 or not m2: break
-            xs1 = map(float, l1.replace(',', ' ').split())
-            xs2 = map(float, l2.replace(',', ' ').split())
-            if len(xs1) != len(xs2): break
-            max_absdiff = max(map(lambda x, y: abs(x - y), xs1, xs2))
-            max_reldiff = max(map(float_compare, xs1, xs2))
-            if max_absdiff > abstol:
-                if max_reldiff < reltol:
-                    print('Max abs. diff. = ' + str(max_absdiff) +
-                          ' but max. rel. diff. = ' + str(max_reldiff) +
-                          ' < ' + str(reltol),
-                          file=logfp)
-                else: break
-        if l1 == '' and l2 != '' or l1 != '' and l2 == '':
-            print('Files ' + f1 + ' and ' + f2 + ' differ in length',
-                  file=logfp)
-            return True
-        elif l1 != l2:
-            print('Files ' + f1 + ' and ' + f2 + ' are different', file=logfp)
-            return True
-        return False
-
+    with open(f1, encoding='utf-8') as fp1, open(f2, encoding='utf-8') as fp2:
+        for l1, l2 in zip(fp1, fp2):
+            l1, l2 = l1.strip(), l2.strip()
+            if l1 == l2:
+                continue
+            m1, m2 = fpline_re.match(l1), fpline_re.match(l2)
+            if not m1 or not m2 or len(m1.groups()) != len(m2.groups()):
+                break
+            xs1, xs2 = map(float, re.split(r',|\s+', l1)), map(float, re.split(r',|\s+', l2))
+            max_absdiff = max(abs(x - y) for x, y in zip(xs1, xs2))
+            max_reldiff = max(float_compare(x, y) for x, y in zip(xs1, xs2))
+            if max_absdiff > abstol and max_reldiff >= reltol:
+                break
+        else:
+            # Check for file length differences after loop completion
+            if not all((line == '' for line in fp1)) or not all((line == '' for line in fp2)):
+                print(f'Files {f1} and {f2} differ in length', file=logfp)
+                return True
+            return False
+        print(f'Files {f1} and {f2} are different', file=logfp)
+        return True
 
 # Compare files: might be NetCDF, might be ASCII.
 
 def file_compare(f1, f2, logfp):
     if not os.path.exists(f1):
-        print('File missing: ' + f1)
-        print('File missing: ' + f1, file=logfp)
+        print(f'File missing: {f1}')
+        print(f'File missing: {f1}', file=logfp)
         return True
     if not os.path.exists(f2):
-        print('File missing: ' + f2)
-        print('File missing: ' + f2, file=logfp)
+        print(f'File missing: {f2}')
+        print(f'File missing: {f2}', file=logfp)
         return True
     with open(f1, encoding="latin-1") as tstfp: chk = tstfp.read(4)
     if chk == 'CDF\x01':
@@ -227,8 +219,9 @@ def file_compare(f1, f2, logfp):
 
 def do_run(t, rdir, logfp, i, n):
     os.chdir(U.ctoaster_root)
-    print('Running test "' + t + '" [' + str(i) + '/' + str(n) + ']')
-    print('Running test "' + t + '"', file=logfp)
+    print(f'Running test "{t}" [{i}/{n}]')
+    print(f'Running test "{t}"', file=logfp)
+
     t = t.replace('\\', '\\\\')
 
     test_dir = os.path.join(U.ctoaster_test, t)
@@ -242,12 +235,12 @@ def do_run(t, rdir, logfp, i, n):
 
     # Set up other options for "new-job".
     cmd += ['-j', rdir]
-    
     # Do job configuration, copying restart files if necessary.
     print('  Configuring job...')
     print('  Configuring job...', file=logfp)
     logfp.flush()
-    if sp.check_call(cmd, stdout=logfp, stderr=logfp) != 0:
+    result = sp.run(cmd, stdout=logfp, stderr=logfp, text=True)
+    if result.returncode != 0:
         sys.exit('Failed to configure test job')
 
     # Build and run job.
@@ -260,7 +253,8 @@ def do_run(t, rdir, logfp, i, n):
     else:
         go = [os.path.join(os.curdir, 'go')]
     cmd = go + ['run', '--no-progress']
-    if sp.check_call(cmd, stdout=logfp, stderr=logfp) != 0:
+    result = sp.run(cmd, stdout=logfp, stderr=logfp, text=True)
+    if result.returncode != 0:
         sys.exit('Failed to build and run test job')
 
     # Compare results, walking over all known good files in the test
@@ -277,11 +271,11 @@ def do_run(t, rdir, logfp, i, n):
             testf = os.path.join(rdir, t, 'output', relname)
             if file_compare(fullf, testf, logfp):
                 passed = False
-                print('    FAILED: ' + relname)
-                print('    FAILED: ' + relname, file=logfp)
+                print(f'    FAILED: {relname}')
+                print(f'    FAILED: {relname}', file=logfp)
             else:
-                print('    OK: ' + relname)
-                print('    OK: ' + relname, file=logfp)
+                print(f'    OK: {relname}')
+                print(f'    OK: {relname}', file=logfp)
     return passed
 
 
@@ -295,7 +289,7 @@ def restart_map(tests):
             r = None
             ifile = os.path.join(U.ctoaster_test, t, 'test_info')
             if not os.path.exists(ifile):
-                sys.exit('Test "' + t + '" does not exist')
+                sys.exit(f'Test "{t}" does not exist')
             with open(ifile) as fp:
                 for line in fp:
                     if line.startswith('restart_from'):
@@ -371,49 +365,55 @@ def run_tests(tests):
 
 # Command line arguments.
 
-def usage():
-    print("""
-Usage: tests <command>
+# def usage():
+#     print("""
+# Usage: tests <command>
 
-Commands:
-  list [<base>]                      List available tests
-  run [-v <version>] <test-name>...  Run test or group of tests
-  add <job>                          Add pre-existing job as test
-  add <test-name>=<job>              Add job as test with given name
-        [-r <test>]                  Restart from a pre-existing test
-""")
-    sys.exit()
+# Commands:
+#   list [<base>]                      List available tests
+#   run [-v <version>] <test-name>...  Run test or group of tests
+#   add <job>                          Add pre-existing job as test
+#   add <test-name>=<job>              Add job as test with given name
+#         [-r <test>]                  Restart from a pre-existing test
+# """)
+#     sys.exit()
 
-if len(sys.argv) < 2: usage()
-action = sys.argv[1]
-if action == 'list':
-    list_base = None
-    if len(sys.argv) == 3: list_base = sys.argv[2]
-    elif len(sys.argv) != 2: usage()
+
+# Setup argparse for command line arguments
+parser = argparse.ArgumentParser(description='Manage and run tests.')
+subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+# Parser for the "list" command
+list_parser = subparsers.add_parser('list', help='List available tests')
+list_parser.add_argument('base', nargs='?', help='Base for listing tests')
+
+# Parser for the "add" command
+add_parser = subparsers.add_parser('add', help='Add a new test')
+add_parser.add_argument('job', help='Job to add as a test')
+add_parser.add_argument('name', nargs='?', help='Name for the new test')
+add_parser.add_argument('-r', '--restart', help='Restart from a pre-existing test')
+
+# Parser for the "run" command
+run_parser = subparsers.add_parser('run', help='Run a test or group of tests')
+run_parser.add_argument('-v', '--version', help='Specify model version')
+run_parser.add_argument('tests', nargs='+', help='Test names or "ALL"')
+
+args = parser.parse_args()
+
+# Handle the commands
+if args.command == 'list':
+    list_base = args.base
     list(list_base)
-elif action == 'add':
-    if len(sys.argv) < 3: usage()
-    job = sys.argv[2]
-    if '=' in job:
-        name, job = job.split('=')
-    else:
-        name = job
-    restart = None
-    if len(sys.argv) == 5 and sys.argv[3] == '-r':
-        restart = sys.argv[4]
-    elif len(sys.argv) != 3: usage()
+elif args.command == 'add':
+    job = args.job
+    name = args.name if args.name else job
+    restart = args.restart
     add_test(job, name, restart)
-elif action == 'run':
-    if len(sys.argv) < 3: usage()
-    if sys.argv[2] == '-v':
-        if len(sys.argv) < 4: usage()
-        test_version = sys.argv[3]        
-        if test_version not in U.available_versions():
-            sys.exit('Model version "' + test_version + '" does not exist')
-        tests = sys.argv[4:]
-    else:
-        tests = sys.argv[2:]
+elif args.command == 'run':
+    tests = args.tests
     if 'ALL' in tests and len(tests) > 1:
         sys.exit('Must specify either "ALL" or a list of tests, not both')
     run_tests(tests)
-else: usage()
+else:
+    parser.print_help()
+
