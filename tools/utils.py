@@ -128,14 +128,21 @@ class ModelConfig:
                 print("scriptdir = '" + scriptdir + "'\n", file=fp)
                 print('# Build type', file=fp)
                 print("build_type = '" + self.build_type + "'\n", file=fp)
+        # copy SConstruct file from installation root
         sfile = os.path.join(d, 'SConstruct')
         if not os.path.exists(sfile):
             shutil.copy(os.path.join(scons_dir, 'SConstruct'), sfile)
+        # copy utils.py file from tools sub-directory
+        # (becasue SConstruct cannot find utils.py [import utils as U] ...)
+        sfile = os.path.join(d, 'utils.py')
+        if not os.path.exists(sfile):
+            shutil.copy(os.path.join(scriptdir, 'utils.py'), sfile)
 
 
 # Determine list of available model versions.
 # NOTE: decode (bytes into a str) the result of $ git tag -l
 #       (apparently, "Subprocesses output bytes, not characters" --  who knew?)
+
 
 def available_versions():
     git_versions = sp.check_output(['git', 'tag', '-l']).splitlines()

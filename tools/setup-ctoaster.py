@@ -23,7 +23,7 @@ def ask(prompt, default, options=None):
         if not options or res in options:
             return res
         else:
-            print('Input must be one of:', ' '.join(options))
+            print('Input must be one of:', ''.join(options))
 
 def yesno(prompt, default):
     opts = 'Yn' if default else 'yN'
@@ -42,7 +42,7 @@ else:
     data = ask('Data directory', os.path.join(base, 'ctoaster.cupcake-data'))
     test = ask('Test directory', os.path.join(base, 'ctoaster.cupcake-test'))
     jobs = ask('Jobs directory', os.path.join(base, 'ctoaster.cupcake-jobs'))
-    vers = ask('Default version', default_version, str(versions))
+    vers = ask('Default version (RETURN to accept / type "help" to see options)', default_version, str(versions))
     with open(U.ctoaster_cfgfile, 'w') as fp:
         print(f'ctoaster_root: {root}', file=fp)
         print(f'ctoaster_data: {data}', file=fp)
