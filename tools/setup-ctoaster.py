@@ -8,8 +8,8 @@ import utils as U
 
 # Data and test GitHub repositories.
 
-datarepo = 'https://github.com/derpycode/ctoaster-data'
-testrepo = 'https://github.com/derpycode/ctoaster-test'
+datarepo = 'https://github.com/genie-model/ctoaster-data'
+testrepo = 'https://github.com/genie-model/ctoaster-test'
 
 
 # Input helpers.
