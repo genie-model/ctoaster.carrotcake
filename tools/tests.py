@@ -168,8 +168,8 @@ def float_compare(x, y):
 
 # Compare ASCII files.
 
-fp_re_str = '[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?'
-fpline_re_str = '^(' + fp_re_str + ')((\s*,\s*|\s+)' + fp_re_str + ')*$'
+fp_re_str = r'[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?'
+fpline_re_str = r'^(' + fp_re_str + r')((\s*,\s*|\s+)' + fp_re_str + r')*$'
 fpline_re = re.compile(fpline_re_str)
 
 def compare_ascii(f1, f2, logfp):
