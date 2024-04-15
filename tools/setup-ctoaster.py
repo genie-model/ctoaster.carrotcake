@@ -8,8 +8,8 @@ import utils as U
 
 # Data and test GitHub repositories.
 
-datarepo = 'https://github.com/derpycode/ctoaster.cupcake-data'
-testrepo = 'https://github.com/derpycode/ctoaster.cupcake-test'
+datarepo = 'https://github.com/derpycode/ctoaster-data'
+testrepo = 'https://github.com/derpycode/ctoaster-test'
 
 
 # Input helpers.
@@ -66,15 +66,15 @@ if not os.path.exists(test):
     download_test = yesno('Test directory does not exist. Download?', True)
 
 if download_data:
-    print('Downloading ctoaster.cupcake-data repository...')
+    print('Downloading ctoaster-data repository...')
     result = sp.run(['git', 'clone', datarepo, data], check=False)
     if result.returncode != 0:
-        print('FAILED TO CLONE ctoaster.cupcake-data REPOSITORY!')
+        print('FAILED TO CLONE ctoaster-data REPOSITORY!')
 if download_test:
-    print('Downloading ctoaster.cupcake-test repository...')
+    print('Downloading ctoaster-test repository...')
     result = sp.run(['git', 'clone', testrepo, test], check=False)
     if result.returncode != 0:
-        print('FAILED TO CLONE ctoaster.cupcake-test REPOSITORY!')
+        print('FAILED TO CLONE ctoaster-test REPOSITORY!')
 
 
 # Test setup.
