@@ -71,4 +71,4 @@ if "ld_library_path" in f90:
 # Build configuration.
 Export("env", "subdirs", "build_type")
 SConscript(os.path.join(srcdir, "SConscript"), variant_dir="#build", duplicate=0)
-Install(".", "build/cupcake.exe")
+Install(".", "build/carrotcake.exe")

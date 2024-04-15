@@ -29,7 +29,7 @@
 \newfloat{listing}{tbp}{lop}
 \floatname{listing}{Listing}
 
-\title{GENIE \texttt{cupcake} on Windows}
+\title{GENIE \texttt{carrotcake} on Windows}
 \author{Ian~Ross}
 \date{4 March 2015}
 
@@ -40,7 +40,7 @@
 
 \maketitle
 
-This document describes how to use the new \texttt{cupcake} version of
+This document describes how to use the new \texttt{carrotcake} version of
 the GENIE model on Windows.  Documentation is divided into two
 sections, one for users of the model and one for those who wish to
 modify the model.
@@ -210,7 +210,7 @@ directory.
   -c CONFIG        --config=CONFIG
 \end{verbatim}
 Full configuration name (this is mostly used for conversions of
-pre-\texttt{cupcake} tests) -- full configurations are stored in the
+pre-\texttt{carrotcake} tests) -- full configurations are stored in the
 \texttt{C:\textbackslash{}cgenie-data\textbackslash{}full-configs}
 directory.
 
@@ -236,7 +236,7 @@ restarting the model).
 \begin{verbatim}
   --old-restart
 \end{verbatim}
-It may sometimes be useful to restart from an old pre-\texttt{cupcake}
+It may sometimes be useful to restart from an old pre-\texttt{carrotcake}
 job.  This flag indicates that the job name supplied to the
 \texttt{-r} flag is the name of an old GENIE job whose output can be
 found in the \texttt{C:\textbackslash{}cgenie\_output} directory.
@@ -426,12 +426,12 @@ of available model versions, use the following command in the
 To configure a job to use a different model version from the default,
 simply add a \texttt{-v} flag to \texttt{new-job} specifying the model
 version you want to use.  For example, to configure a job to use the
-\texttt{cupcake-1.0} version of the model, use something like the
+\texttt{carrotcake-1.0} version of the model, use something like the
 following command:
 \begin{verbatim}
   new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS\LAB_0.snowball snowball 10 ...
-            ... -v cupcake-1.0
+            ... -v carrotcake-1.0
 \end{verbatim}
 Within a job directory, you can see what model version the job was
 configured with by looking at the contents of the
@@ -446,7 +446,7 @@ version.
 
 For developers of GENIE, there are a few extra things to know beyond
 what's needed to run the model.  Most of this is covered in the
-\emph{GENIE \texttt{cupcake} Configuration and Build System} document.
+\emph{GENIE \texttt{carrotcake} Configuration and Build System} document.
 
 The only Windows-specific feature to be covered here is how to debug
 the model in Visual Studio.  This is a little complicated and there

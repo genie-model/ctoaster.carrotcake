@@ -295,7 +295,7 @@ else:
 
 model_config = U.ModelConfig(build_type)
 model_dir = model_config.directory()
-exe_name = 'cupcake-' + build_type + '.exe' if build_type else 'cupcake.exe'
+exe_name = 'carrotcake-' + build_type + '.exe' if build_type else 'carrotcake.exe'
 
 
 # Clean up output directories for this job and (optionally) build
@@ -306,8 +306,8 @@ def clean(clean_model):
     message(f'{clean_msg}...')
     if clean_model:
         model_config.clean()  # calls method 'clean' for class ModelConfig [utils.py]
-        for exe in glob.iglob('cupcake-*.exe'):
-            os.remove(exe)  # finds and removes 'cupcake-*.exe' files
+        for exe in glob.iglob('carrotcake-*.exe'):
+            os.remove(exe)  # finds and removes 'carrotcake-*.exe' files
         if os.path.exists('build.log'):
             os.remove('build.log')  # removes 'build.log' if it exists
     if os.path.exists('run.log'):
@@ -345,7 +345,7 @@ def build(cont):
 
     if not need_build:
         message('Build is up to date')
-        shutil.copy(os.path.join(model_dir, 'cupcake.exe'), os.path.join(os.curdir, exe_name))
+        shutil.copy(os.path.join(model_dir, 'carrotcake.exe'), os.path.join(os.curdir, exe_name))
         if cont: cont()
         return
 
@@ -360,7 +360,7 @@ def build2(result, cont):
     if result == 0:
         line('')
         message('Build OK')
-        shutil.copy(os.path.join(model_dir, 'cupcake.exe'),
+        shutil.copy(os.path.join(model_dir, 'carrotcake.exe'),
                     os.path.join(os.curdir, exe_name))
         if cont: cont()
     else:

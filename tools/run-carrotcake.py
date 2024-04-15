@@ -8,7 +8,7 @@ if not U.read_ctoaster_config():
     sys.exit("cTOASTER not set up: run the setup.py script!")
 
 # Setup command line arguments using argparse
-parser = argparse.ArgumentParser(description='Run a cupcake job with the specified configuration.')
+parser = argparse.ArgumentParser(description='Run a carrotcake job with the specified configuration.')
 parser.add_argument('base_config', help='Base configuration name')
 parser.add_argument('config_dir', help='Directory containing the configuration')
 parser.add_argument('run_id', help='Unique identifier for the run')

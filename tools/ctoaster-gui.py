@@ -294,7 +294,7 @@ class Application(AfterHandler, ttk.Frame):
     def run_job(self):
         """Run a job (button press callback)"""
 
-        # Check for existence of cupcake-ship.exe executable and build
+        # Check for existence of carrotcake-ship.exe executable and build
         # if necessary.
         exe = os.path.join(
             U.ctoaster_jobs,
@@ -302,9 +302,9 @@ class Application(AfterHandler, ttk.Frame):
             U.ctoaster_version,
             platform,
             "ship",
-            "cupcake.exe",
+            "carrotcake.exe",
         )
-        runexe = os.path.join(self.job.jobdir, "cupcake-ship.exe")
+        runexe = os.path.join(self.job.jobdir, "carrotcake-ship.exe")
         if not os.path.exists(exe):
             d = BuildExecutableDialog(self, self.job.jobdir)
             if not d.result:

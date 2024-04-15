@@ -23,9 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install scons and matplotlib using pip
 RUN pip install --no-cache-dir scons matplotlib
 
-# Clone the ctoaster.cupcake repository
-RUN git clone https://github.com/derpycode/ctoaster.cupcake.git
-WORKDIR /ctoaster.cupcake
+# Clone the ctoaster.carrotcake repository
+RUN git clone https://github.com/derpycode/ctoaster.carrotcake.git
+WORKDIR /ctoaster.carrotcake
 
 # Create the final image
 FROM continuumio/miniconda3:latest
@@ -37,7 +37,7 @@ COPY --from=build /opt/conda/envs/myproject /opt/conda/envs/myproject
 SHELL ["conda", "run", "-n", "myproject", "/bin/bash", "-c"]
 
 # Copy the project files
-COPY --from=build /ctoaster.cupcake /ctoaster.cupcake
-WORKDIR /ctoaster.cupcake
+COPY --from=build /ctoaster.carrotcake /ctoaster.carrotcake
+WORKDIR /ctoaster.carrotcake
 
 # Set any necessary environment variables

@@ -29,7 +29,7 @@
 \newfloat{listing}{tbp}{lop}
 \floatname{listing}{Listing}
 
-\title{(cTOASTER) \texttt{cupcake} Configuration and Build System}
+\title{(cTOASTER) \texttt{carrotcake} Configuration and Build System}
 \author{Ian Ross, with contributions from:\\Andy Ridgwell}
 \date{\today}
 
@@ -44,7 +44,7 @@
 \texttt{typewriter} font.  Commands that extend over several lines 
 are marked with lines ending \texttt{...} with the following line 
 beginning \texttt{...}.}}  describes the new configuration and build system 
-developed for the \texttt{cupcake} release of the \textbf{cTOASTER} model. 
+developed for the \texttt{carrotcake} release of the \textbf{cTOASTER} model. 
 Documentation is divided into three sections, one for users of the 
 model, one for those who wish to modify the model and one for those 
 concerned with maintaining and extending the configuration and build 
@@ -58,8 +58,8 @@ system infrastructure.
 
 Open a shell in your home directory and do this (this is based on the current repository setup, which will probably change a little soon):
 \begin{verbatim}
-  git clone https://github.com/derpycode/ctoaster.cupcake.git
-  cd ~/ctoaster.cupcake
+  git clone https://github.com/derpycode/ctoaster.carrotcake.git
+  cd ~/ctoaster.carrotcake
   ./setup-ctoaster
 \end{verbatim}
 (Accept the defaults for all the questions it asks -- just hit return at each prompt to accept the default.)
@@ -72,7 +72,7 @@ and you can configure and run jobs as:
 \begin{verbatim}
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS/LAB_0.snowball snowball 10
-  cd ~/ctoaster.cupcake-jobs/snowball
+  cd ~/ctoaster.carrotcake-jobs/snowball
   ./go run
 \end{verbatim}
 The job results appear in the \texttt{output} directory in the job
@@ -80,13 +80,13 @@ directory.
 
 There is also a facility to configure and run experiments in the same way as for \textbf{cgenie.muffin}:
 \begin{verbatim}
-  ./run-cupcake <base-config> <config-dir> <run-id> <run-length> [<restart>]
+  ./run-carrotcake <base-config> <config-dir> <run-id> <run-length> [<restart>]
 \end{verbatim}
 which for the example above, would be:
 \begin{verbatim}
-  ./run-cupcake cgenie.eb_go_gs_ac_bg.p0650e.NONE LABS LAB_0.snowball 10
+  ./run-carrotcake cgenie.eb_go_gs_ac_bg.p0650e.NONE LABS LAB_0.snowball 10
 \end{verbatim}
-In this, \texttt{run-cupcake.py} first configures a new job using \texttt{./new-job},
+In this, \texttt{run-carrotcake.py} first configures a new job using \texttt{./new-job},
 seamlessly changes directory, and then automatically runs it using \texttt{./go run}
 
 %----------------------------------------------------------------------
@@ -100,18 +100,18 @@ seamlessly changes directory, and then automatically runs it using \texttt{./go 
 %----------------------------------------------------------------------
 \section{Installation and setup}
 
-To install \textbf{cTOASTER}, first choose a location for the installation. (On linux machines, it's probably best just to install \textbf{cTOASTER} in your home directory.) Then clone the main \texttt{ctoaster.cupcake} repository from GitHub
+To install \textbf{cTOASTER}, first choose a location for the installation. (On linux machines, it's probably best just to install \textbf{cTOASTER} in your home directory.) Then clone the main \texttt{ctoaster.carrotcake} repository from GitHub
 using the command:
 \begin{verbatim}
-  git clone https://github.com/derpycode/ctoaster.cupcake.git
+  git clone https://github.com/derpycode/ctoaster.carrotcake.git
 \end{verbatim}
-This will produce a new directory called \texttt{ctoaster.cupcake} containing the model source code and build scripts.
+This will produce a new directory called \texttt{ctoaster.carrotcake} containing the model source code and build scripts.
 
 Before using the model, it's necessary to do a little bit of setup.
-Go into the new \texttt{ctoaster.cupcake} directory and run the
+Go into the new \texttt{ctoaster.carrotcake} directory and run the
 \texttt{setup-ctoaster} script:
 \begin{verbatim}
-  cd ~/ctoaster.cupcake
+  cd ~/ctoaster.carrotcake
   ./setup-ctoaster
 \end{verbatim}
 The script will ask where you want to put a number of things -- it's usually find to just take the defaults (just hit enter at each of the prompts).  In all of what follows below, we'll assume that you chose the defaults. The
@@ -119,16 +119,16 @@ info the script asks for are:
 \begin{itemize}
   \item{The \textbf{cTOASTER} root installation directory: unless you know what
     you're doing, 
-    \\accept the \texttt{~/ctoaster.cupcake} default for this.}
-  \item{The \textbf{cTOASTER} data directory (default \texttt{~/ctoaster.cupcake-data})
+    \\accept the \texttt{~/ctoaster.carrotcake} default for this.}
+  \item{The \textbf{cTOASTER} data directory (default \texttt{~/ctoaster.carrotcake-data})
     where base and user model configurations are stored, along with
     forcing files.}
-  \item{The \textbf{cTOASTER} test directory (default \texttt{~/ctoaster.cupcake-test})
+  \item{The \textbf{cTOASTER} test directory (default \texttt{~/ctoaster.carrotcake-test})
     where \textbf{cTOASTER} jobs with known good outputs can be stored for use as
     tests -- it's possible to run sets of tests and compare their
     results with the known good values with a single command, which is
     useful for making sure that the model is working.}
-  \item{The \textbf{cTOASTER} jobs directory (default \texttt{~/ctoaster.cupcake-jobs})
+  \item{The \textbf{cTOASTER} jobs directory (default \texttt{~/ctoaster.carrotcake-jobs})
     where new \textbf{cTOASTER} jobs are set up -- the \texttt{new-job} script
     (see next section) sets jobs up here by default.}
   \item{The default model version to use for running jobs. 
@@ -140,7 +140,7 @@ After providing this information, the setup script will ask whether you want to 
 
 Once the data and test repositories have been downloaded, \textbf{cTOASTER} is ready to use.  The setup information is written to a \texttt{.ctoasterrc} file in your home directory. If you ever want to set the model up afresh, just remove this file and run the \texttt{setup-ctoaster} script again.
 
-To check that the installation has been successful and that the model works on your machine, you can run some basic test jobs -- in the \texttt{~/ctoaster.cupcake} directory, just type:
+To check that the installation has been successful and that the model works on your machine, you can run some basic test jobs -- in the \texttt{~/ctoaster.carrotcake} directory, just type:
 \begin{verbatim}
   ./tests run basic
 \end{verbatim}
@@ -155,16 +155,16 @@ This runs an ocean-atmosphere simulation and an ocean biogeochemistry simulation
 \section{Creating new jobs}
 
 New \textbf{cTOASTER} jobs are configured using the \texttt{new-job} script in
-\texttt{~/ctoaster.cupcake}. This takes a number of arguments that describe the
+\texttt{~/ctoaster.carrotcake}. This takes a number of arguments that describe the
 job to be set up and produces a job directory under
-\\\texttt{~/ctoaster.cupcake-jobs} containing everything needed to build and run
+\\\texttt{~/ctoaster.carrotcake-jobs} containing everything needed to build and run
 the model with the selected configuration.  The \texttt{new-job}
 script should be run as:
 \begin{verbatim}
   new-job [options] job-name run-length
 \end{verbatim}
 where \texttt{job-name} is the name to be used for the job directory
-to be created under \texttt{~/ctoaster.cupcake-jobs} and \texttt{run-length} is
+to be created under \texttt{~/ctoaster.carrotcake-jobs} and \texttt{run-length} is
 the length of the model run in years.  The possible options for
 \texttt{new-job} are as follows (in each case given in both short and
 long forms where these exist).  First, there are three options that
@@ -177,21 +177,21 @@ configuration may also be used (the \texttt{-c} option).
   -b BASE_CONFIG   --base-config=BASE_CONFIG
 \end{verbatim}
 The base model configuration to use -- these are stored in the
-\texttt{~/ctoaster.cupcake-data/base-configs} directory.
+\texttt{~/ctoaster.carrotcake-data/base-configs} directory.
 
 \begin{verbatim}
   -u USER_CONFIG   --user-config=USER_CONFIG
 \end{verbatim}
 The user model configuration to apply on top of the base configuration
 -- model user configurations are stored in the
-\texttt{~/ctoaster.cupcake-data/user-configs} directory.
+\texttt{~/ctoaster.carrotcake-data/user-configs} directory.
 
 \begin{verbatim}
   -c CONFIG        --config=CONFIG
 \end{verbatim}
 Full configuration name (this is mostly used for conversions of
-pre-\texttt{cupcake} tests) -- full configurations are stored in the
-\texttt{~/ctoaster.cupcake-data/full-configs} directory.
+pre-\texttt{carrotcake} tests) -- full configurations are stored in the
+\texttt{~/ctoaster.carrotcake-data/full-configs} directory.
 
 In addition to the configuration file options, the following
 additional options may be supplied to \texttt{new-job}:
@@ -215,11 +215,11 @@ restarting the model).
 \begin{verbatim}
   --old-restart
 \end{verbatim}
-It may sometimes be useful to restart from an old pre-\texttt{cupcake}
+It may sometimes be useful to restart from an old pre-\texttt{carrotcake}
 job.  This flag indicates that the job name supplied to the
 \texttt{-r} flag is the name of an old \textbf{cTOASTER} job whose output can be
 found in the 
-\\\texttt{~/ctoaster.cupcake\_output} directory.
+\\\texttt{~/ctoaster.carrotcake\_output} directory.
 
 \begin{verbatim}
   --t100
@@ -232,7 +232,7 @@ the default model resolution instead of 96).
   -j JOB_DIR     --job-dir=JOB_DIR
 \end{verbatim}
 It can sometimes be useful to put cTOASTER jobs somewhere other than
-\texttt{~/ctoaster.cupcake-jobs}.  This flag allows an alternative job directory
+\texttt{~/ctoaster.carrotcake-jobs}.  This flag allows an alternative job directory
 to be specified.
 
 \begin{verbatim}
@@ -240,7 +240,7 @@ to be specified.
 \end{verbatim}
 Normally, \texttt{new-job} will generate a job set up to use the
 default model version which was selected when the
-\texttt{setup-ctoaster.cupcake} script was run.  This flag allows for a
+\texttt{setup-ctoaster.carrotcake} script was run.  This flag allows for a
 different model version to be selected.
 
 \subsection*{Examples}
@@ -251,7 +251,7 @@ different model version to be selected.
 \end{verbatim}
 This configures the first example job in the workshop handout.  After
 running this invocation of \texttt{new-job}, a new
-\texttt{~/ctoaster.cupcake-jobs/snowball} job directory will have been created
+\texttt{~/ctoaster.carrotcake-jobs/snowball} job directory will have been created
 from which the job can be executed.
 
 \begin{verbatim}
@@ -269,10 +269,10 @@ Once a job has been set up using the \texttt{new-job} script, it can
 be run from the newly created job directory using a ``\texttt{go}''
 script.  Configuring and running a job is as simple as:
 \begin{verbatim}
-  cd ~/ctoaster.cupcake
+  cd ~/ctoaster.carrotcake
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS/LAB_0.snowball snowball 10
-  cd ~/ctoaster.cupcake-jobs/snowball
+  cd ~/ctoaster.carrotcake-jobs/snowball
   ./go run
 \end{verbatim}
 The \texttt{go} script has three main options and two advanced
@@ -304,7 +304,7 @@ machine, for which a \texttt{set-platform} option is provided by the
 %----------------------------------------------------------------------
 \section{Managing configuration files}
 
-Configuration files are all kept in \texttt{~/ctoaster.cupcake-data}, base
+Configuration files are all kept in \texttt{~/ctoaster.carrotcake-data}, base
 configurations in the \texttt{base-configs} directory and user
 configurations in \texttt{user-configs}.  All of this configuration
 data is held in a git repository on \textbf{GitHub}, so if you want to add user
@@ -322,7 +322,7 @@ simulation results.  The second application is of more interest for
 people changing the \textbf{cTOASTER} model code, but it can still be useful to
 save jobs as tests.
 
-The \texttt{tests} script in \texttt{~/ctoaster.cupcake} is used to manage and
+The \texttt{tests} script in \texttt{~/ctoaster.carrotcake} is used to manage and
 run test jobs.  To list the available tests, do
 \begin{verbatim}
   ./tests list
@@ -335,7 +335,7 @@ where \texttt{<test>} is either a single test name (e.g.
 \texttt{basic/biogem}), a set of tests (e.g. \texttt{basic}) or
 \texttt{ALL}, which runs \emph{all} available tests.  The tests are
 run as normal cTOASTER jobs in a sub-directory of \
-\\texttt{~/ctoaster.cupcake-jobs}
+\\texttt{~/ctoaster.carrotcake-jobs}
 with a name of the form \texttt{test-YYYYMMDD-HHMMSS} based on the
 current date and time.  As well as full test job output, build and run
 logs, a \texttt{test.log} file is produced in this test directory,
@@ -347,7 +347,7 @@ An existing job can be added as a test using a command like
   ./tests add <job-name>
 \end{verbatim}
 where \texttt{<job-name>} is the name of an existing job in
-\texttt{~/ctoaster.cupcake-jobs}.  Note that you need to run the job before you
+\texttt{~/ctoaster.carrotcake-jobs}.  Note that you need to run the job before you
 can add it as a test!  The test script will ask you which output files
 you want to use for comparison for each model component -- there are
 sensible defaults in most cases, but you can select individual files
@@ -398,19 +398,19 @@ model versions from users.
 
 Model versions are indicated by git 'tags'.  In order to see a list
 of available model versions, use the following command in the
-\texttt{~/ctoaster.cupcake} directory:
+\texttt{~/ctoaster.carrotcake} directory:
 \begin{verbatim}
   git tag -l
 \end{verbatim}
 To configure a job to use a different model version from the default,
 simply add a \texttt{-v} flag to \texttt{new-job} specifying the model
 version you want to use.  For example, to configure a job to use the
-\texttt{cupcake-1.0} version of the model, use something like the
+\texttt{carrotcake-1.0} version of the model, use something like the
 following command:
 \begin{verbatim}
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS/LAB_0.snowball snowball 10 ...
-            ... -v cupcake-1.0
+            ... -v carrotcake-1.0
 \end{verbatim}
 Within a job directory, you can see what model version the job was
 configured with by looking at the contents of the
@@ -420,11 +420,11 @@ will just contain the git tag of the model version.
 %----------------------------------------------------------------------
 \section{Legacy (cGENIE) work-flow}
 
-The example experiment above can also be configured and run via a single command\footnote{Usage: \texttt{run-cupcake <base-config> <config-dir> <run-id> <run-length> [<restart>]}} :
+The example experiment above can also be configured and run via a single command\footnote{Usage: \texttt{run-carrotcake <base-config> <config-dir> <run-id> <run-length> [<restart>]}} :
 \begin{verbatim}
-  ./run-cupcake cgenie.eb_go_gs_ac_bg.p0650e.NONE LABS LAB_0.snowball 10
+  ./run-carrotcake cgenie.eb_go_gs_ac_bg.p0650e.NONE LABS LAB_0.snowball 10
 \end{verbatim}
-This employs \texttt{run-cupcake.py}, which first configures a new job using \texttt{./new-job},
+This employs \texttt{run-carrotcake.py}, which first configures a new job using \texttt{./new-job},
 automatically changes to the corresponding job directory, and then runs it using \texttt{./go run}.
 
 %----------------------------------------------------------------------
@@ -450,9 +450,9 @@ users, except that when the \texttt{setup-ctoaster} script asks for the
 default model version to use, you should answer
 ``\texttt{DEVELOPMENT}''.  This causes model executables for all jobs
 to be built by default from the source code currently in
-\texttt{~/ctoaster.cupcake/src}, rather than from a specified past model
+\texttt{~/ctoaster.carrotcake/src}, rather than from a specified past model
 version.  In this way, you can make changes to the model source code
-under \texttt{~/ctoaster.cupcake/src} and doing a \texttt{./go run} in a job
+under \texttt{~/ctoaster.carrotcake/src} and doing a \texttt{./go run} in a job
 directory will trigger a build and execution of the model based on the
 changed code.  (For a simpler way to check for successful model
 compilation, see below in Section~\ref{sec:build-system}.)
@@ -460,9 +460,9 @@ compilation, see below in Section~\ref{sec:build-system}.)
 %----------------------------------------------------------------------
 \section{Model source organisation}
 
-The model source lives in \texttt{~/ctoaster.cupcake/src}, with one subdirectory
+The model source lives in \texttt{~/ctoaster.carrotcake/src}, with one subdirectory
 for each model component (\texttt{embm}, \texttt{biogem}, etc.), the
-main \texttt{cupcake.f90} program, plus a couple of extra sub-directories
+main \texttt{carrotcake.f90} program, plus a couple of extra sub-directories
 for utility routines.  All of the code is FORTRAN 90 and all source
 files accordingly have a \texttt{.f90} extension.
 
@@ -484,7 +484,7 @@ to manage model compilation, described in the next section.
 
 The build system uses \textbf{SCons}, a 'Make replacement' written in
 \textbf{•}.  The rest of the build system is also written in Python
-and lives in \texttt{~/ctoaster.cupcake/scripts}.  In the normal course of
+and lives in \texttt{~/ctoaster.carrotcake/scripts}.  In the normal course of
 things, it shouldn't be necessary for \textbf{cTOASTER} model developers to touch
 this stuff -- it should just work.  (There are cases where this isn't
 quite true, mostly to do with major changes in the layout or naming of
@@ -498,21 +498,21 @@ correct model version is built from the correct sources (taking
 account of the model version requested) and again, should just work.
 
 The scripts perform builds in directories under
-\texttt{~/ctoaster.cupcake-jobs/MODELS} -- after running a few jobs, you'll see
+\texttt{~/ctoaster.carrotcake-jobs/MODELS} -- after running a few jobs, you'll see
 one directory under there for each model version you've used.  The
 directories all ultimately have the form:
 \begin{verbatim}
-  ~/ctoaster.cupcake-jobs/MODELS/<version>/<platform>/<hash>/<build-type>
+  ~/ctoaster.carrotcake-jobs/MODELS/<version>/<platform>/<hash>/<build-type>
 \end{verbatim}
 where the different components have the following meanings:
 \begin{description}
   \item[\texttt{<version>}]{The model version for this build.  If you
     run jobs with a non-\texttt{DEVELOPMENT} model version, you'll
-    also see a directory called \texttt{~/ctoaster.cupcake-jobs/MODELS/REPOS}
+    also see a directory called \texttt{~/ctoaster.carrotcake-jobs/MODELS/REPOS}
     holding repository copies at fixed versions -- when a build is
     required for a non-\texttt{DEVELOPMENT} model version, the source
     code is accessed from one of these \texttt{REPOS} directories
-    rather than from \texttt{~/ctoaster.cupcake/src}.}
+    rather than from \texttt{~/ctoaster.carrotcake/src}.}
   \item[\texttt{<platform>}]{A ``platform'' is basically a combination
     of a machine name or type and a compiler/NetCDF directory
     combination -- see Section~\ref{sec:platforms}.  Having this level
@@ -538,7 +538,7 @@ As an example, here's a path to a build directory on my machine
 for a job with preprocessor definitions \texttt{cTOASTERNX=36},
 \texttt{cTOASTERNY=36}:
 \begin{verbatim}
-  /home/iross/ctoaster.cupcake-jobs/MODELS/DEVELOPMENT/seneca/...
+  /home/iross/ctoaster.carrotcake-jobs/MODELS/DEVELOPMENT/seneca/...
             ...50b3ce7f3162a0f783e4424c9a294de0061e0cdc/ship
 \end{verbatim}
 
@@ -556,12 +556,12 @@ Although this is really pretty neat for managing model executables for
 running jobs, it's not very convenient for day-to-day development,
 where you often just want to check that the model compiles.  In order
 to make this convenient, the SCons scripts are set up so that it's
-possible to just run \texttt{scons} in the \texttt{~/ctoaster.cupcake} directory
+possible to just run \texttt{scons} in the \texttt{~/ctoaster.carrotcake} directory
 and have \emph{a} version of the model built right there (actually
-into a \texttt{~/ctoaster.cupcake/build} directory).  What this means is that
+into a \texttt{~/ctoaster.carrotcake/build} directory).  What this means is that
 you can set up your editor compilation command (if you use \textbf{Emacs}, the
 thing that gets run when you type \texttt{C-c m}) to be
-``\texttt{scons -C ~/ctoaster.cupcake}'' and all your usual compiler error
+``\texttt{scons -C ~/ctoaster.carrotcake}'' and all your usual compiler error
 message chasing commands will work just right.  (The \texttt{-C}
 argument to the \texttt{scons} program is the same as that for
 \texttt{make}: it tells SCons to change to a particular directory
@@ -576,8 +576,8 @@ described in more detail in Section~\ref{sec:git-practices}):
 \begin{enumerate}
   \item{Do \texttt{git checkout -b <new-branch-name>} to create a git
     topic branch to work on.}
-  \item{Edit files under \texttt{~/ctoaster.cupcake/src}.}
-  \item{Test model build by running \texttt{scons -C ~/ctoaster.cupcake}.}
+  \item{Edit files under \texttt{~/ctoaster.carrotcake/src}.}
+  \item{Test model build by running \texttt{scons -C ~/ctoaster.carrotcake}.}
   \item{Set up test jobs using \texttt{new-job}.}
   \item{Run jobs in their job directories using \texttt{./go run}
     (uses development code).}
@@ -614,7 +614,7 @@ problems with old, no longer used, parameter names appearing in
 configuration files and with configuration files that do not specify
 values for newly introduced parameter names.  The way that this works
 is that the default namelists for each module
-(e.g. \texttt{~/ctoaster.cupcake/src/embm/embm-defaults.nml}) contain a default
+(e.g. \texttt{~/ctoaster.carrotcake/src/embm/embm-defaults.nml}) contain a default
 value for every parameter appearing in the relevant namelist in the
 FORTRAN code.  The \emph{new-job} script then ignores any parameters
 appearing in configuration files whose names do not occur in the
@@ -656,7 +656,7 @@ work:
     work on something else.  This ``one repository, many branches''
     style of working is very powerful.}
   \item[Repository forks and pull requests]{Instead of just cloning
-    the \texttt{ctoaster.cupcake} repository and pushing changes directly to it
+    the \texttt{ctoaster.carrotcake} repository and pushing changes directly to it
     (which is only possible if you're one of the owners of the
     repository), create a personal \emph{fork} of the repository on
     GitHub and do your work in that.  You set up the main repository
@@ -698,7 +698,7 @@ work:
 The build system has a simple facility for managing compiler paths and
 options and the location of NetCDF libraries for building \textbf{cTOASTER} on
 different platforms.  This mechanism is based on ``platform files'' in
-this directory \texttt{~/ctoaster.cupcake/platforms}, each of which is named
+this directory \texttt{~/ctoaster.carrotcake/platforms}, each of which is named
 after the hostname of the machine it's for, or the host and compiler
 combination (e.g. for my machine \texttt{seneca}, something like
 \texttt{seneca-gfortran} or \texttt{seneca-ifort}).  (There is also a
@@ -770,18 +770,18 @@ Each platform script must provide definitions for the following names:
 Porting \textbf{cTOASTER} to a new platform should require little more than making
 a new platform file: just copy an existing one, ideally one that uses
 the same compiler, and edit the locations of the NetCDF libraries.
-(The platform file should live in \texttt{~/ctoaster.cupcake/platforms} and its
+(The platform file should live in \texttt{~/ctoaster.carrotcake/platforms} and its
 name should be whatever is returned from the Linux \texttt{hostname}
 command.)  It you want to use different compilers on the same
 platform, just create multiple platform files called
 \texttt{<hostname>-<compiler>} -- you'll probably also want to have a
 default platform with just the hostname so that you can do builds
 without setting the platform explicitly.  If you want to do builds
-directly in the \texttt{~/ctoaster.cupcake} directory using a non-default
+directly in the \texttt{~/ctoaster.carrotcake} directory using a non-default
 compiler, you can either just move the platform files around in
-\texttt{~/ctoaster.cupcake/platforms} so that the default file for your platform
+\texttt{~/ctoaster.carrotcake/platforms} so that the default file for your platform
 uses the compiler you want, or (not really recommended) you can create
-a file called \texttt{~/ctoaster.cupcake/config/platform-name} containing the
+a file called \texttt{~/ctoaster.carrotcake/config/platform-name} containing the
 name of the platform you want to use\footnote{This suborns the
   platform selection method used in builds as run from the \texttt{go}
   script, and the reason it's not really recommended is that it will
@@ -807,13 +807,13 @@ extra explanation.
 All the configuration and build scripts require Python 3 (and called as
 \texttt{python3}).
 
-The main Python scripts all live in \texttt{~/ctoaster.cupcake/tools}.  
+The main Python scripts all live in \texttt{~/ctoaster.carrotcake/tools}.  
 \\The \texttt{setup-ctoaster}, \texttt{new-job}, \texttt{go} and
 \texttt{tests} programs are all shell scripts that invoke \texttt{python3}.
 
 \section{Model versions, repositories and development code}
 
-The whole story with the \texttt{~/ctoaster.cupcake-jobs/MODELS} directory
+The whole story with the \texttt{~/ctoaster.carrotcake-jobs/MODELS} directory
 hierarchy for model builds is a little complicated, but it solves a
 number of related problems:
 \begin{enumerate}
@@ -830,14 +830,14 @@ number of related problems:
 \end{enumerate}
 
 When a specific model version is required for a job, the
-\texttt{ctoaster.cupcake} source repository is unpacked into a directory under
-\texttt{~/ctoaster.cupcake-jobs/MODELS/REPOS} at exactly that version and the
+\texttt{ctoaster.carrotcake} source repository is unpacked into a directory under
+\texttt{~/ctoaster.carrotcake-jobs/MODELS/REPOS} at exactly that version and the
 source tree and configuration scripts for that model version are used
--- this means that even if your main \texttt{~/ctoaster.cupcake} directory, for
-example, is at version \texttt{cupcake-3.5}, if you run the
-\texttt{new-job} script telling it to use version \texttt{cupcake-1.0}
+-- this means that even if your main \texttt{~/ctoaster.carrotcake} directory, for
+example, is at version \texttt{carrotcake-3.5}, if you run the
+\texttt{new-job} script telling it to use version \texttt{carrotcake-1.0}
 for the new job, \emph{all of the configuration and build steps} for
-the new job will be done with the \texttt{cupcake-1.0} versions of the
+the new job will be done with the \texttt{carrotcake-1.0} versions of the
 model and configuration scripts.  This allows for perfect
 reproducibility of jobs between model versions.
 
@@ -885,7 +885,7 @@ preprocessor definitions.
 
 When the \texttt{go} script needs to work out which directory to use
 under 
-\\\texttt{~/ctoaster.cupcake-jobs/MODELS} to use for the model for the
+\\\texttt{~/ctoaster.carrotcake-jobs/MODELS} to use for the model for the
 current job, it reads the \texttt{jobs.py} file and turns the
 coordinate definitions into a canonical form (basically just by
 stripping whitespace and line endings, and sorting the variable names,
@@ -899,25 +899,25 @@ be used as a unique identifier of the job coordinate definition.
 The way that the \textbf{cTOASTER} build system using SConstruct is a little bit
 complicated, mostly in order to manage the segregation of different
 model builds as described above.  The main
-\texttt{~/ctoaster.cupcake/SConstruct} SCons file depends on reading some
+\texttt{~/ctoaster.carrotcake/SConstruct} SCons file depends on reading some
 supporting files from the model build directory (which is either one
-of the directories under \texttt{~/ctoaster.cupcake-jobs/MODELS} or, for the
-degenerate case of testing model compilation, \texttt{~/ctoaster.cupcake}).
+of the directories under \texttt{~/ctoaster.carrotcake-jobs/MODELS} or, for the
+degenerate case of testing model compilation, \texttt{~/ctoaster.carrotcake}).
 
 Those supporting files are the \texttt{job.py} file that defines the
 model coordinate sizes, described in the previous section, and a file
 called \texttt{version.py} that tells the \texttt{SConstruct} script
-where to find the model source code (\texttt{~/ctoaster.cupcake/src} for
+where to find the model source code (\texttt{~/ctoaster.carrotcake/src} for
 development builds, or a directory under
-\\\texttt{~/ctoaster.cupcake-jobs/MODELS/REPOS} for builds using a specified model
+\\\texttt{~/ctoaster.carrotcake-jobs/MODELS/REPOS} for builds using a specified model
 version) and build scripts and the type of build to perform
 (e.g. \texttt{ship} or \texttt{debug}).
 
 If you look in one of the model build directories under
-\texttt{~/ctoaster.cupcake-jobs/MODELS}, you'll find that that's more or less
+\texttt{~/ctoaster.carrotcake-jobs/MODELS}, you'll find that that's more or less
 all there is there, apart from the \texttt{SConstruct} file, the
 \texttt{build} directory where compilation output goes, a
-\texttt{build.log} file and the \texttt{cupcake.exe} executable output.
+\texttt{build.log} file and the \texttt{carrotcake.exe} executable output.
 Setting things up this way means that model source code and build
 results are always kept seperate and there should never be any
 confusion.
@@ -936,10 +936,10 @@ This is possibly the nastiest and most uncertain part of the model
 configuration scripts.  Because of the way that the namelist
 parameters are defined for some of the \textbf{cTOASTER} model components, it's
 not possible to determine exactly which model input files (from
-\texttt{~/ctoaster.cupcake/data} or from 
-\\\texttt{~/ctoaster.cupcake-data/forcings}) are
+\texttt{~/ctoaster.carrotcake/data} or from 
+\\\texttt{~/ctoaster.carrotcake-data/forcings}) are
 required to run a particular job.  That's a bit of a problem, since
-the idea is that each job directory under \texttt{~/ctoaster.cupcake-jobs}
+the idea is that each job directory under \texttt{~/ctoaster.carrotcake-jobs}
 should be self-contained so that you could tar them up and send them
 to someone else for them to duplicate the job you were running, or for
 archiving purposes.  This is also important for producing
@@ -949,7 +949,7 @@ to run the job live.  Getting the required files into that directory
 requires a little bit of ingenuity.
 
 The \texttt{copy\_data\_files} routine (in
-\texttt{~/ctoaster.cupcake/scripts/config\_utils.py}) uses some simple
+\texttt{~/ctoaster.carrotcake/scripts/config\_utils.py}) uses some simple
 heuristics to figure out what input files might be needed.  For each
 \textbf{cTOASTER} component, it extracts a list of candidate filenames from the
 namelist for that component -- basically all string-link parameters
@@ -958,11 +958,11 @@ order, eliminating candidates that are successfully located before
 going on to the next step -- in each case, if a candidate is matched,
 the match is copied to the job's \texttt{input} directory:
 \begin{enumerate}
-  \item{Look in the \texttt{~/ctoaster.cupcake/data} sub-directory for the
+  \item{Look in the \texttt{~/ctoaster.carrotcake/data} sub-directory for the
     relevant model component for an exact match to the candidate.}
-  \item{Look in \texttt{~/ctoaster.cupcake-data/forcings} for an exact match to
+  \item{Look in \texttt{~/ctoaster.carrotcake-data/forcings} for an exact match to
     the candidate.}
-  \item{Look in the \texttt{~/ctoaster.cupcake/data} sub-directory for the
+  \item{Look in the \texttt{~/ctoaster.carrotcake/data} sub-directory for the
     relevant model component for partial matches to the candidate,
     i.e. files whose name contain the string we're looking for but
     aren't an exact match.}
@@ -986,20 +986,20 @@ things just needs to be tested carefully...
 
 %======================================================================
 \appendix
-\chapter{(Some) teaching labs updated for \texttt{cupcake}}
+\chapter{(Some) teaching labs updated for \texttt{carrotcake}}
 
 A few configuration and data files needed some fixups for these things
 to work -- these changes have all been committed to the
-\texttt{ctoaster.cupcake-data} repository.
+\texttt{ctoaster.carrotcake-data} repository.
 
 \section{Session \#0000}
 
 \subsection*{Section 1}
 
 \begin{verbatim}
-  git clone https://github.com/genie-model/ctoaster.cupcake.git
-  cd ~/ctoaster.cupcake
-  ./setup-ctoaster.cupcake
+  git clone https://github.com/genie-model/ctoaster.carrotcake.git
+  cd ~/ctoaster.carrotcake
+  ./setup-ctoaster.carrotcake
   ./tests run basic
 \end{verbatim}
 
@@ -1008,7 +1008,7 @@ to work -- these changes have all been committed to the
 \begin{verbatim}
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE -u LABS/LAB_0.snowball ...
             ... LAB_0.snowball 10
-  cd ~/ctoaster.cupcake-jobs/LAB_0.snowball
+  cd ~/ctoaster.carrotcake-jobs/LAB_0.snowball
   ./go run
   cd output/biogem
   cat biogem_series_ocn_temp.res
@@ -1017,22 +1017,22 @@ to work -- these changes have all been committed to the
 \subsection*{Section 7}
 
 \begin{verbatim}
-  cd ~/ctoaster.cupcake_output
-  wget http://www.seao2.info/ctoaster.cupcake/labs/UoB.2013/...
+  cd ~/ctoaster.carrotcake_output
+  wget http://www.seao2.info/ctoaster.carrotcake/labs/UoB.2013/...
             ...130328.p0650e.LiCa.OHM10.SPIN0.tar.gz
   tar xzf 130328.p0650e.LiCa.OHM10.SPIN0.tar.gz
-  cd ~/ctoaster.cupcake
+  cd ~/ctoaster.carrotcake
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE -u LABS/LAB_0.snowball ...
             ... LAB_0.snowball-from-restart 100 ...
             ... -r 130328.p0650e.LiCa.OHM10.SPIN0 --old-restart
-  cd ~/ctoaster.cupcake-jobs/LAB_0.snowball-from-restart
+  cd ~/ctoaster.carrotcake-jobs/LAB_0.snowball-from-restart
   ./go run
 \end{verbatim}
 
 \subsection*{Section 8}
 
 \begin{verbatim}
-  cd ~/ctoaster.cupcake-data/user-configs
+  cd ~/ctoaster.carrotcake-data/user-configs
   cp LAB_0.snowball LAB_0.snowball-experiment
 \end{verbatim}
 
@@ -1040,23 +1040,23 @@ Then edit the \texttt{LAB\_0.snowball-experiment} configuraton file to
 change the \texttt{ea\_radfor\_scl\_co2} variable (to 10.0, say).
 
 \begin{verbatim}
-  cd ~/ctoaster.cupcake
+  cd ~/ctoaster.carrotcake
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS/LAB_0.snowball-experiment ...
             ... LAB_0.snowball-experiment-1 100
-  cd ~/ctoaster.cupcake-jobs/LAB_0.snowball-experiment-1
+  cd ~/ctoaster.carrotcake-jobs/LAB_0.snowball-experiment-1
   ./go run
 \end{verbatim}
 
 It's easy to make another job to extend this simulation -- just
 restart from the end of the last job:
 \begin{verbatim}
-  cd ~/ctoaster.cupcake
+  cd ~/ctoaster.carrotcake
   ./new-job -b cgenie.eb_go_gs_ac_bg.p0650e.NONE ...
             ... -u LABS/LAB_0.snowball-experiment ...
             ... LAB_0.snowball-experiment-1-extend 100 ...
             ... -r LAB_0.snowball-experiment-1
-  cd ~/ctoaster.cupcake-jobs/LAB_0.snowball-experiment-1-extend
+  cd ~/ctoaster.carrotcake-jobs/LAB_0.snowball-experiment-1-extend
   ./go run
 \end{verbatim}
 You can do this indefinitely...
@@ -1066,11 +1066,11 @@ You can do this indefinitely...
 \subsection*{Section 1.3}
 
 \begin{verbatim}
-  cd ~/ctoaster.cupcake_output
-  wget http://www.seao2.info/ctoaster.cupcake/labs/UoB.2013/...
+  cd ~/ctoaster.carrotcake_output
+  wget http://www.seao2.info/ctoaster.carrotcake/labs/UoB.2013/...
             ...EXAMPLE.worjh2.PO4Fe.SPIN.tar.gz
   tar xzf EXAMPLE.worjh2.PO4Fe.SPIN.tar.gz
-  cd ~/ctoaster.cupcake-data/user-configs/LABS
+  cd ~/ctoaster.carrotcake-data/user-configs/LABS
   cp LAB_1.colorinjection LAB_1.colorinjection-experiment
 \end{verbatim}
 
@@ -1082,7 +1082,7 @@ in the lab script.
             ... -u LABS/LAB_1.colorinjection-experiment ...
             ... LAB_1.colorinjection 20 ...
             ... -r EXAMPLE.worjh2.PO4Fe.SPIN --old-restart
-  cd ~/ctoaster.cupcake-jobs/LAB_1.colorinjection
+  cd ~/ctoaster.carrotcake-jobs/LAB_1.colorinjection
   ./go run
 \end{verbatim}
 
@@ -1092,7 +1092,7 @@ in the lab script.
   ./new-job -b cgenie.eb_go_gs_ac_bg.worjh2.rb ...
             ... -u LABS/LAB_1.hosing LAB_1.hosing 20 ...
             ... -r EXAMPLE.worjh2.PO4Fe.SPIN --old-restart
-  cd ~/ctoaster.cupcake-jobs/LAB_1.hosing
+  cd ~/ctoaster.carrotcake-jobs/LAB_1.hosing
   ./go run
 \end{verbatim}
 
@@ -1104,7 +1104,7 @@ in the lab script.
   ./new-job -O -b cgenie.eb_go_gs_ac_bg.worjh2.BASEFe ...
             ... -u LABS/LAB_2.CO2emissions LAB_2.CO2emissions 20 ...
             ...  -r EXAMPLE.worjh2.PO4Fe.SPIN --old-restart
-  cd ~/ctoaster.cupcake-jobs/LAB_2.CO2emissions
+  cd ~/ctoaster.carrotcake-jobs/LAB_2.CO2emissions
   ./go run
 \end{verbatim}
 
@@ -1114,7 +1114,7 @@ in the lab script.
   ./new-job -O -b cgenie.eb_go_gs_ac_bg.worjh2.BASEFe ...
             ... -u LABS/LAB_2.CONTROL LAB_2.CONTROL 20 ...
             ...  -r EXAMPLE.worjh2.PO4Fe.SPIN --old-restart
-  cd ~/ctoaster.cupcake-jobs/LAB_2.CONTROL
+  cd ~/ctoaster.carrotcake-jobs/LAB_2.CONTROL
   ./go run
 \end{verbatim}
 

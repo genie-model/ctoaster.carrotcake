@@ -5,7 +5,7 @@ import re
 import utils as U
 
 # Regex for matching floating point values.
-fp_re = '[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?'
+fp_re = r'[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?'
 
 # Read and parse a cTOASTER configuration file.
 def read_config(f, msg):
@@ -18,7 +18,7 @@ def read_config(f, msg):
         res = {}
         with open(f) as fp:
             for line in fp:
-                if re.match('^\s*#', line): continue
+                if re.match(r'^\s*#', line): continue
                 m = re.search('([a-zA-Z0-9_]+)=(.*)', line)
                 if m: res[m.group(1)] = clean(m.group(2).strip())
             return res
@@ -257,7 +257,7 @@ class Namelist:
             for k in m.keys():
                 if k[0:plen] != prefix: continue
                 rk = k[plen+1:]
-                s = re.search('_(\d+)$', rk)
+                s = re.search(r'_(\d+)$', rk)
                 if s: rk = rk.rstrip('_0123456789') + '(' + s.group(1) + ')'
                 if (rk in self.entries):
                     current = self.entries[rk]

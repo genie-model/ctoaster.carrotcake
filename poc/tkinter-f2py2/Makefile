@@ -1,9 +1,9 @@
 # A simple makefile using f2py
 
-all: cupcake.so
+all: carrotcake.so
 
-cupcake.so: model.f90
-	f2py -c -m cupcake $^
+carrotcake.so: model.f90
+	f2py -c -m carrotcake $^
 
 .PHONY:		all clean spotless
 
