@@ -144,11 +144,16 @@ reltol = 35
 # Make sure that the nccompare tool is available.
 def ensure_nccompare():
     if os.path.exists(nccompare): return
+    # cmd = ['scons', '-C', U.ctoaster_root, os.path.join('build', 'nccompare.exe')]
+    # result = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, text=True)
+    # if result.returncode != 0:
+    #     sys.exit('Could not build nccompare.exe program')
     cmd = ['scons', '-C', U.ctoaster_root, os.path.join('build', 'nccompare.exe')]
-    result = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, text=True)
+    result = sp.run(cmd, stdout=sp.PIPE, stderr=sp.PIPE, text=True)
     if result.returncode != 0:
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
         sys.exit('Could not build nccompare.exe program')
-
 
 # Compare NetCDF files.
 def compare_nc(f1, f2, logfp):
