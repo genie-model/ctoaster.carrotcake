@@ -7,6 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from utils import read_ctoaster_config
 
+# Initialize the configuration
+read_ctoaster_config()
+
+from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
+
 app = FastAPI()
 
 # CORS configuration
@@ -26,16 +31,10 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize the configuration
-read_ctoaster_config()
-
 
 @app.get("/jobs")
 def list_jobs():
     try:
-        # Access the global variable ctoaster_jobs after it has been initialized
-        from utils import ctoaster_jobs
-
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
@@ -59,8 +58,6 @@ def get_job_details(job_name: str):
     global selected_job_name
     selected_job_name = job_name  # Store the selected job name
     try:
-        from utils import ctoaster_jobs
-
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
@@ -111,8 +108,6 @@ def get_job_details(job_name: str):
 def delete_job():
     global selected_job_name
     try:
-        from utils import ctoaster_jobs
-
         if not selected_job_name:
             raise HTTPException(status_code=400, detail="No job selected")
 
@@ -148,8 +143,6 @@ async def add_job(request: Request):
 
     if not job_name:
         raise HTTPException(status_code=400, detail="Job name is required")
-
-    from utils import ctoaster_jobs
 
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
