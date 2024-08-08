@@ -1,9 +1,9 @@
 import logging
 import os
+import shutil
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from gui import Job, JobFolder
 
 from utils import read_ctoaster_config
 
@@ -21,6 +21,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize the configuration
 read_ctoaster_config()
@@ -46,13 +50,14 @@ def list_jobs():
         return {"error": str(e)}
 
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Global variable to store the currently selected job name
+selected_job_name = None
 
 
 @app.get("/job/{job_name}")
 def get_job_details(job_name: str):
+    global selected_job_name
+    selected_job_name = job_name  # Store the selected job name
     try:
         from utils import ctoaster_jobs
 
@@ -94,13 +99,84 @@ def get_job_details(job_name: str):
             "t100": "true" if t100 else "false",
         }
 
-        # Log the job details
         logger.info(f"Job details retrieved: {job_details}")
 
         return {"job": job_details}
     except Exception as e:
         logger.error(f"Error retrieving job details: {str(e)}")
         return {"error": str(e)}
+
+
+@app.delete("/delete-job")
+def delete_job():
+    global selected_job_name
+    try:
+        from utils import ctoaster_jobs
+
+        if not selected_job_name:
+            raise HTTPException(status_code=400, detail="No job selected")
+
+        if ctoaster_jobs is None:
+            raise ValueError("ctoaster_jobs is not defined")
+
+        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+
+        if not os.path.isdir(job_path):
+            logger.info(f"Job not found: {job_path}")
+            return {"error": "Job not found"}
+
+        # Delete the job directory
+        shutil.rmtree(job_path)
+
+        local_job_name = selected_job_name
+
+        # Clear the selected job name
+        selected_job_name = None
+
+        logger.info(f"Job deleted: {job_path}")
+        return {"message": f"Job '{local_job_name}' deleted successfully"}
+
+    except Exception as e:
+        logger.error(f"Error deleting job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting job: {str(e)}")
+
+
+@app.post("/add-job")
+async def add_job(request: Request):
+    data = await request.json()
+    job_name = data.get("job_name")
+
+    if not job_name:
+        raise HTTPException(status_code=400, detail="Job name is required")
+
+    from utils import ctoaster_jobs
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_name)
+    if os.path.exists(job_dir):
+        raise HTTPException(status_code=400, detail="Job already exists")
+
+    try:
+        os.makedirs(os.path.join(job_dir, "config"))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Could not create job directory: {str(e)}"
+        )
+
+    config_path = os.path.join(job_dir, "config", "config")
+    try:
+        with open(config_path, "w") as config_file:
+            config_file.write(
+                "base_config: ?\nuser_config: ?\nrun_length: ?\nt100: ?\n"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Could not write configuration file: {str(e)}"
+        )
+
+    return {"status": "success", "message": f"Job '{job_name}' created successfully"}
 
 
 # Run the server with: uvicorn REST:app --reload
