@@ -16,7 +16,7 @@ app = FastAPI()
 
 # CORS configuration
 origins = [  
-    "http://cupcake.ctoaster.org"   # React development server
+    "http://localhost:5001"   # React development server
 ]
 
 app.add_middleware(
