@@ -54,7 +54,7 @@ netcdf_base = None  # Store as a pair (tuple) of include and lib paths as distro
 # For example if you have installed the NetCDF libraries yourself under /home/youruser/netcdf
 # you should add ('home/youruser/netcdf/include','/home/youruser/netcdf/lib') to the list below:
 #
-poss_netcdf = [('/usr/include','/usr/lib/x86_64-linux-gnu'), ('/usr/lib64/gfortran/modules','/usr/lib64')]
+poss_netcdf = [('/usr/local/include','/usr/local/lib'), ('/usr/include','/usr/lib/x86_64-linux-gnu'), ('/usr/lib64/gfortran/modules','/usr/lib64')]
 
 for poss in poss_netcdf:
     if (os.path.exists(os.path.join(poss[0], 'netcdf.mod')) and
