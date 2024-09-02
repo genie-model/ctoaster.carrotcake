@@ -15,8 +15,8 @@ from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
 app = FastAPI()
 
 # CORS configuration
-origins = [
-    "http://localhost:5001",  # React development server
+origins = [  
+    "http://localhost:5001"   # React development server
 ]
 
 app.add_middleware(
