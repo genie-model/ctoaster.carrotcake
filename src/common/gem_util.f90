@@ -424,7 +424,6 @@ CONTAINS
   ! REPORT ERROR
   ! (generic error reporting subroutine)
   SUBROUTINE sub_report_error(dum_mod,dum_proc,dum_mes,dum_act,dum_data,dum_fatal)
-    USE genie_global, ONLY: write_status
     IMPLICIT NONE
     ! dummy arguments
     CHARACTER(LEN=*),INTENT(in)::dum_mod
@@ -454,7 +453,8 @@ CONTAINS
        PRINT*,' '
        PRINT*,'*********** END ************'
        PRINT*,' '
-       CALL write_status('ERRORED')
+       ! CALL write_status('ERRORED') ! NOTE: requires USE genie_global, ONLY: write_status
+       stop
     ELSE
        PRINT*,' '
        PRINT*,'*** WARNING ***'
