@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import os
@@ -7,20 +8,20 @@ import sys
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTasks
+from starlette.responses import StreamingResponse
 
 from utils import read_ctoaster_config
 
 # Initialize the configuration
 read_ctoaster_config()
 
-from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
+from utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
 
 app = FastAPI()
 
 # CORS configuration
-origins = [  
-    "http://localhost:5001"   # React development server
-]
+origins = ["http://localhost:5001"]  # React development server
 
 app.add_middleware(
     CORSMiddleware,
@@ -453,3 +454,135 @@ async def update_setup(job_name: str, request: Request):
     except Exception as e:
         logger.error(f"Error updating setup details: {str(e)}")
         return {"error": str(e)}
+
+
+@app.post("/run-job")
+async def run_job():
+    global selected_job_name
+    try:
+        if not selected_job_name:
+            raise HTTPException(status_code=400, detail="No job selected")
+
+        if ctoaster_jobs is None:
+            raise ValueError("ctoaster_jobs is not defined")
+
+        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+
+        if not os.path.isdir(job_path):
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Check if the job is in a runnable state
+        status = "UNCONFIGURED"
+        if os.path.exists(os.path.join(job_path, "data_genie")):
+            status = "RUNNABLE"
+            if os.path.exists(os.path.join(job_path, "status")):
+                with open(os.path.join(job_path, "status")) as f:
+                    status_line = f.readline().strip()
+                    status = status_line.split()[0] if status_line else "ERROR"
+
+        if status != "RUNNABLE":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job '{selected_job_name}' is not configured or runnable.",
+            )
+
+        # Correct path to check for the executable
+        exe = os.path.join(
+            ctoaster_jobs,
+            "MODELS",
+            ctoaster_version,  # Replace with actual version variable or string
+            sys.platform,  # Dynamically get platform information
+            "ship",
+            "carrotcake.exe",
+        )
+
+        # Check if executable exists
+        if not os.path.exists(exe):
+            raise HTTPException(
+                status_code=500, detail=f"Executable not found at {exe}"
+            )
+
+        # Start executable and direct stdout and stderr to run.log in job directory
+        log_file_path = os.path.join(job_path, "run.log")
+        with open(log_file_path, "a") as log_file:
+            process = sp.Popen([exe], cwd=job_path, stdout=log_file, stderr=sp.STDOUT)
+
+        return {"message": f"Job '{selected_job_name}' is now running"}
+    except FileNotFoundError as fnfe:
+        error_message = f"File not found error: {str(fnfe)}"
+        logger.error(error_message)
+        raise HTTPException(status_code=500, detail=error_message)
+    except Exception as e:
+        error_message = f"Unexpected error running job '{selected_job_name}': {str(e)}"
+        logger.error(error_message)
+        raise HTTPException(status_code=500, detail=error_message)
+
+
+@app.get("/get-log/{job_name}")
+async def get_log(job_name: str):
+    if not job_name:
+        raise HTTPException(status_code=400, detail="No job specified")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    log_file_path = os.path.join(job_path, "run.log")
+
+    if not os.path.exists(log_file_path):
+        logger.info(f"Log file not found at: {log_file_path}")
+        # Return empty content instead of raising 404
+        return {"content": ""}
+
+    # Read the entire log file content
+    with open(log_file_path, "r") as log_file:
+        content = log_file.read()
+
+    return {"content": content}
+
+
+# SSE endpoint to stream job output
+@app.get("/stream-output/{job_name}")
+async def stream_output(job_name: str, background_tasks: BackgroundTasks):
+    """
+    Stream the output of the specified job using Server-Sent Events (SSE).
+    """
+    if not job_name:
+        raise HTTPException(status_code=400, detail="No job specified")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    log_file_path = os.path.join(job_path, "run.log")
+
+    # Wait for the log file to be created (retry mechanism)
+    max_retries = 30  # Maximum number of retries
+    retry_interval = 1  # Time in seconds between retries
+    retry_count = 0
+
+    while not os.path.exists(log_file_path) and retry_count < max_retries:
+        logger.info(f"Waiting for log file to be created at: {log_file_path}")
+        await asyncio.sleep(retry_interval)
+        retry_count += 1
+
+    # If the log file is still not found, raise a 404 error
+    if not os.path.exists(log_file_path):
+        logger.error(f"Log file not found at: {log_file_path}")
+        raise HTTPException(
+            status_code=404, detail=f"Log file not found at: {log_file_path}"
+        )
+
+    # Function to read the log file line by line
+    async def log_file_reader():
+        with open(log_file_path, "r") as log_file:
+            log_file.seek(0, os.SEEK_END)  # Start at the end of the file
+            while True:
+                line = log_file.readline()
+                if line:
+                    yield f"data: {line.strip()}\n\n"
+                else:
+                    await asyncio.sleep(1)  # Wait for new data
+
+    # Start streaming the log file to the client
+    return StreamingResponse(log_file_reader(), media_type="text/event-stream")
