@@ -18,8 +18,10 @@ from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
 app = FastAPI()
 
 # CORS configuration
-origins = [  
-    "http://localhost:5001"   # React development server
+origins = [
+    "http://localhost:5001" # for local testing
+    # "http://cupcake.ctoaster.org", # React development server
+    # "*" # allowing everything for testing
 ]
 
 app.add_middleware(
@@ -163,6 +165,8 @@ def delete_job():
     # return {"message": f"Job '{selected_job_name}' deleted successfully"}
 
 
+import shutil
+
 @app.post("/add-job")
 async def add_job(request: Request):
     data = await request.json()
@@ -178,6 +182,7 @@ async def add_job(request: Request):
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
+    # Create the job directory
     try:
         os.makedirs(os.path.join(job_dir, "config"))
     except Exception as e:
@@ -185,6 +190,7 @@ async def add_job(request: Request):
             status_code=500, detail=f"Could not create job directory: {str(e)}"
         )
 
+    # Create the main config file
     config_path = os.path.join(job_dir, "config", "config")
     try:
         with open(config_path, "w") as config_file:
@@ -194,6 +200,25 @@ async def add_job(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Could not write configuration file: {str(e)}"
+        )
+
+    # Copy default namelist files
+    try:
+        default_namelist_dir = os.path.join(ctoaster_data, "default-namelists")
+        target_namelist_dir = os.path.join(job_dir, "")
+
+        if os.path.exists(default_namelist_dir):
+            for namelist_file in os.listdir(default_namelist_dir):
+                full_file_path = os.path.join(default_namelist_dir, namelist_file)
+                if os.path.isfile(full_file_path):
+                    shutil.copy(full_file_path, target_namelist_dir)
+        else:
+            raise HTTPException(
+                status_code=500, detail="Default namelist directory not found."
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Could not copy default namelist files: {str(e)}"
         )
 
     return {"status": "success", "message": f"Job '{job_name}' created successfully"}
@@ -453,3 +478,33 @@ async def update_setup(job_name: str, request: Request):
     except Exception as e:
         logger.error(f"Error updating setup details: {str(e)}")
         return {"error": str(e)}
+
+
+#Namelist Apis
+
+@app.get("/jobs/{job_id}/namelists")
+def get_namelists(job_id: str):
+    job_dir = f'/home/ravitheja/ctoaster.carrotcake-jobs/{job_id}'
+    
+    if not os.path.exists(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    namelists = [file[5:] for file in os.listdir(job_dir) if file.startswith('data_')]
+
+    return {"namelists": namelists}
+
+
+@app.get("/jobs/{job_id}/namelists/{namelist_name}")
+def get_namelist_content(job_id: str, namelist_name: str):
+    job_dir = f'/home/ravitheja/ctoaster.carrotcake-jobs/{job_id}'
+    namelist_file = os.path.join(job_dir, f'{namelist_name}')
+
+    print(":: namelist_file is ::", namelist_file)
+    
+    if not os.path.exists(namelist_file):
+        raise HTTPException(status_code=404, detail="Namelist not found")
+
+    with open(namelist_file, 'r') as file:
+        content = file.read()
+
+    return {"namelist_name": namelist_name, "content": content}
