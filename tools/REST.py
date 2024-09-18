@@ -480,7 +480,7 @@ async def run_job():
                     status_line = f.readline().strip()
                     status = status_line.split()[0] if status_line else "ERROR"
 
-        if status != "RUNNABLE":
+        if status not in ["RUNNABLE", "PAUSED"]:
             raise HTTPException(
                 status_code=400,
                 detail=f"Job '{selected_job_name}' is not configured or runnable.",
@@ -502,6 +502,33 @@ async def run_job():
                 status_code=500, detail=f"Executable not found at {exe}"
             )
 
+        # Handle resuming a paused job
+        command_file_path = os.path.join(job_path, "command")
+        if status == "PAUSED":
+            # Remove any existing command file
+            if os.path.exists(command_file_path):
+                os.remove(command_file_path)
+
+            # Read the necessary parameters from the status file
+            status_file_path = os.path.join(job_path, "status")
+            with open(status_file_path, "r") as status_file:
+                status_line = status_file.readline().strip()
+                if status_line.startswith("PAUSED"):
+                    status_parts = status_line.split()
+                    if len(status_parts) >= 3:
+                        _, koverall, genie_clock = status_parts[
+                            :3
+                        ]  # Extract the first three values
+                    else:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Status line does not contain the required parameters to resume the job.",
+                        )
+
+                    # Write the GUI_RESTART command to the command file
+                    with open(command_file_path, "w") as command_file:
+                        command_file.write(f"GUI_RESTART {koverall} {genie_clock}\n")
+
         # Start executable and direct stdout and stderr to run.log in job directory
         log_file_path = os.path.join(job_path, "run.log")
         with open(log_file_path, "a") as log_file:
@@ -514,6 +541,43 @@ async def run_job():
         raise HTTPException(status_code=500, detail=error_message)
     except Exception as e:
         error_message = f"Unexpected error running job '{selected_job_name}': {str(e)}"
+        logger.error(error_message)
+        raise HTTPException(status_code=500, detail=error_message)
+
+
+@app.post("/pause-job")
+async def pause_job():
+    global selected_job_name
+    try:
+        if not selected_job_name:
+            raise HTTPException(status_code=400, detail="No job selected")
+
+        if ctoaster_jobs is None:
+            raise ValueError("ctoaster_jobs is not defined")
+
+        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+
+        if not os.path.isdir(job_path):
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Check if the job is currently running or paused
+        status_file_path = os.path.join(job_path, "status")
+        if not os.path.exists(status_file_path):
+            raise HTTPException(status_code=400, detail="Job status file not found")
+
+        with open(status_file_path, "r") as status_file:
+            status_line = status_file.readline().strip()
+            if "PAUSED" in status_line:
+                raise HTTPException(status_code=400, detail="Job is already paused")
+
+        # Write the PAUSE command to the command file
+        command_file_path = os.path.join(job_path, "command")
+        with open(command_file_path, "w") as command_file:
+            command_file.write("PAUSE\n")
+
+        return {"message": f"Job '{selected_job_name}' has been paused"}
+    except Exception as e:
+        error_message = f"Unexpected error pausing job '{selected_job_name}': {str(e)}"
         logger.error(error_message)
         raise HTTPException(status_code=500, detail=error_message)
 
