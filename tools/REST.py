@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess as sp
 import sys
+import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -456,6 +457,31 @@ async def update_setup(job_name: str, request: Request):
         return {"error": str(e)}
 
 
+## Utility function used in run_job
+def read_status_file(job_dir):
+    """
+    Attempts to read the status file for a job, handling potential issues on Windows where
+    the file might be locked by another process.
+
+    :param job_dir: The job directory containing the 'status' file.
+    :return: A list containing the status information or None if the file could not be read.
+    """
+    status = None
+    safety = 0
+    while not status and safety < 1000:
+        try:
+            if safety != 0:
+                time.sleep(0.001)
+            safety += 1
+            with open(os.path.join(job_dir, "status")) as fp:
+                status = fp.readline().strip().split()
+        except IOError:
+            pass  # You may log the error here if needed
+    if safety == 1000:
+        print("Failed to read the status file after multiple attempts.")
+    return status
+
+
 @app.post("/run-job")
 async def run_job():
     global selected_job_name
@@ -476,9 +502,12 @@ async def run_job():
         if os.path.exists(os.path.join(job_path, "data_genie")):
             status = "RUNNABLE"
             if os.path.exists(os.path.join(job_path, "status")):
-                with open(os.path.join(job_path, "status")) as f:
-                    status_line = f.readline().strip()
-                    status = status_line.split()[0] if status_line else "ERROR"
+                # Use the read_status_file function to read the status
+                status_parts = read_status_file(job_path)
+                if status_parts:
+                    status = status_parts[0]  # The first element is the status
+                else:
+                    status = "ERROR"
 
         if status not in ["RUNNABLE", "PAUSED"]:
             raise HTTPException(
@@ -502,37 +531,36 @@ async def run_job():
                 status_code=500, detail=f"Executable not found at {exe}"
             )
 
+        # Copy the executable to the job directory
+        runexe = os.path.join(job_path, "carrotcake-ship.exe")
+        if os.path.exists(runexe):
+            os.remove(runexe)
+        shutil.copy(exe, runexe)
+
         # Handle resuming a paused job
         command_file_path = os.path.join(job_path, "command")
+        if os.path.exists(command_file_path):
+            os.remove(command_file_path)
+
         if status == "PAUSED":
-            # Remove any existing command file
-            if os.path.exists(command_file_path):
-                os.remove(command_file_path)
-
-            # Read the necessary parameters from the status file
-            status_file_path = os.path.join(job_path, "status")
-            with open(status_file_path, "r") as status_file:
-                status_line = status_file.readline().strip()
-                if status_line.startswith("PAUSED"):
-                    status_parts = status_line.split()
-                    if len(status_parts) >= 3:
-                        _, koverall, genie_clock = status_parts[
-                            :3
-                        ]  # Extract the first three values
-                    else:
-                        raise HTTPException(
-                            status_code=500,
-                            detail="Status line does not contain the required parameters to resume the job.",
-                        )
-
-                    # Write the GUI_RESTART command to the command file
-                    with open(command_file_path, "w") as command_file:
-                        command_file.write(f"GUI_RESTART {koverall} {genie_clock}\n")
+            status_parts = read_status_file(job_path)
+            if status_parts and len(status_parts) >= 4:
+                _, koverall, _, genie_clock = status_parts[:4]
+                # Write the GUI_RESTART command to the command file
+                with open(command_file_path, "w") as command_file:
+                    command_file.write(f"GUI_RESTART {koverall} {genie_clock}\n")
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Status file does not contain the required parameters to resume the job.",
+                )
 
         # Start executable and direct stdout and stderr to run.log in job directory
         log_file_path = os.path.join(job_path, "run.log")
         with open(log_file_path, "a") as log_file:
-            process = sp.Popen([exe], cwd=job_path, stdout=log_file, stderr=sp.STDOUT)
+            process = sp.Popen(
+                [runexe], cwd=job_path, stdout=log_file, stderr=sp.STDOUT
+            )
 
         return {"message": f"Job '{selected_job_name}' is now running"}
     except FileNotFoundError as fnfe:
