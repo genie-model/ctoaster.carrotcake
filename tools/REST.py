@@ -327,12 +327,10 @@ def get_setup(job_name: str):
             raise ValueError("Config file not found")
 
         setup_details = {
-            "run_segment": "1:1-END",
             "base_config": "",
             "user_config": "",
             "modifications": "",
             "run_length": "n/a",
-            "t100": False,
             "restart_from": "",
         }
 
@@ -345,10 +343,6 @@ def get_setup(job_name: str):
                     setup_details["user_config"] = line.split(":", 1)[1].strip()
                 elif line.startswith("run_length:"):
                     setup_details["run_length"] = line.split(":", 1)[1].strip()
-                elif line.startswith("t100:"):
-                    setup_details["t100"] = (
-                        line.split(":", 1)[1].strip().lower() == "true"
-                    )
                 elif line.startswith("restart:"):
                     setup_details["restart_from"] = line.split(":", 1)[1].strip()
 
@@ -357,13 +351,6 @@ def get_setup(job_name: str):
         if os.path.exists(mods_path):
             with open(mods_path) as f:
                 setup_details["modifications"] = f.read().strip()
-
-        # Get the segments for the job
-        segments = get_run_segments(job_name)
-        if segments and "run_segments" in segments:
-            setup_details["run_segment"] = segments["run_segments"][
-                -1
-            ]  # Use the last segment
 
         return {"setup": setup_details}
     except Exception as e:
@@ -394,7 +381,6 @@ async def update_setup(job_name: str, request: Request):
         user_config = data.get("user_config", "")
         modifications = data.get("modifications", "")
         run_length = data.get("run_length", "n/a")
-        t100 = "true" if data.get("t100", False) else "false"
         restart = data.get("restart_from", "")
         if restart == "":
             restart = None  # Handle empty string as None
@@ -417,7 +403,6 @@ async def update_setup(job_name: str, request: Request):
             today = datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"config_date: {today}\n")
             f.write(f"run_length: {run_length}\n")
-            f.write(f"t100: {t100}\n")
 
         # Update the modifications file
         mods_path = os.path.join(job_path, "config", "config_mods")
@@ -442,8 +427,6 @@ async def update_setup(job_name: str, request: Request):
             job_name,
             str(run_length),
         ]
-        if t100 == "true":
-            cmd.append("--t100")
         if modifications:
             cmd.extend(["-m", mods_path])
         if restart:
