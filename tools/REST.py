@@ -286,6 +286,29 @@ def get_user_configs():
         )
 
 
+@app.get("/completed-jobs")
+async def get_completed_jobs():
+    try:
+        if ctoaster_jobs is None:
+            raise ValueError("ctoaster_jobs is not defined")
+
+        completed_jobs = []
+        # Iterate over all jobs in the jobs directory
+        for job_name in os.listdir(ctoaster_jobs):
+            job_path = os.path.join(ctoaster_jobs, job_name)
+            if os.path.isdir(job_path):
+                status_file = os.path.join(job_path, "status")
+                if os.path.exists(status_file):
+                    status_parts = read_status_file(job_path)
+                    if status_parts and status_parts[0] == "COMPLETE":
+                        completed_jobs.append(job_name)
+
+        return {"completed_jobs": completed_jobs}
+    except Exception as e:
+        logger.error(f"Error fetching completed jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/setup/{job_name}")
 def get_setup(job_name: str):
     try:
@@ -317,13 +340,17 @@ def get_setup(job_name: str):
         with open(config_path) as f:
             for line in f:
                 if line.startswith("base_config:"):
-                    setup_details["base_config"] = line.split(":")[1].strip()
-                if line.startswith("user_config:"):
-                    setup_details["user_config"] = line.split(":")[1].strip()
-                if line.startswith("run_length:"):
-                    setup_details["run_length"] = line.split(":")[1].strip()
-                if line.startswith("t100:"):
-                    setup_details["t100"] = line.split(":")[1].strip().lower() == "true"
+                    setup_details["base_config"] = line.split(":", 1)[1].strip()
+                elif line.startswith("user_config:"):
+                    setup_details["user_config"] = line.split(":", 1)[1].strip()
+                elif line.startswith("run_length:"):
+                    setup_details["run_length"] = line.split(":", 1)[1].strip()
+                elif line.startswith("t100:"):
+                    setup_details["t100"] = (
+                        line.split(":", 1)[1].strip().lower() == "true"
+                    )
+                elif line.startswith("restart:"):
+                    setup_details["restart_from"] = line.split(":", 1)[1].strip()
 
         # Read modifications
         mods_path = os.path.join(job_path, "config", "config_mods")
@@ -337,14 +364,6 @@ def get_setup(job_name: str):
             setup_details["run_segment"] = segments["run_segments"][
                 -1
             ]  # Use the last segment
-
-        # Get the restart_from options
-        restart_jobs = []
-        restart_dir = os.path.join(ctoaster_data, "restart-jobs")
-        if os.path.exists(restart_dir):
-            for d in os.listdir(restart_dir):
-                restart_jobs.append(d)
-            setup_details["restart_from"] = restart_jobs
 
         return {"setup": setup_details}
     except Exception as e:
@@ -373,11 +392,12 @@ async def update_setup(job_name: str, request: Request):
         # Prepare the updated configuration data
         base_config = data.get("base_config", "")
         user_config = data.get("user_config", "")
-        full_config = data.get("full_config", "")
         modifications = data.get("modifications", "")
         run_length = data.get("run_length", "n/a")
         t100 = "true" if data.get("t100", False) else "false"
         restart = data.get("restart_from", "")
+        if restart == "":
+            restart = None  # Handle empty string as None
 
         with open(config_path, "w") as f:
             if base_config:
@@ -390,14 +410,10 @@ async def update_setup(job_name: str, request: Request):
                     f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n"
                 )
                 f.write(f"user_config: {user_config}\n")
-            if full_config:
-                f.write(
-                    f"full_config_dir: {os.path.join(ctoaster_data, 'full-configs')}\n"
-                )
-                f.write(f"full_config: {full_config}\n")
-            if restart:
+            if restart is not None:
                 f.write(f"restart: {restart}\n")
-
+            else:
+                f.write("restart: \n")
             today = datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"config_date: {today}\n")
             f.write(f"run_length: {run_length}\n")
@@ -410,15 +426,6 @@ async def update_setup(job_name: str, request: Request):
                 f.write(modifications)
         elif os.path.exists(mods_path):
             os.remove(mods_path)
-
-        # Set the status of the job before updating the setup details
-        status_file = os.path.join(job_path, "status")
-        if os.path.exists(status_file):
-            job_status = read_status_file(job_path)
-            if job_status and job_status[0] == "COMPLETE":
-                job_status[0] = "PAUSED"
-                with open(status_file, "w") as fp:
-                    fp.write(" ".join(job_status) + "\n")
 
         # Regenerate the namelists
         new_job_script = os.path.join(ctoaster_root, "tools", "new-job.py")
@@ -435,18 +442,21 @@ async def update_setup(job_name: str, request: Request):
             job_name,
             str(run_length),
         ]
-        if t100:
+        if t100 == "true":
             cmd.append("--t100")
         if modifications:
             cmd.extend(["-m", mods_path])
+        if restart:
+            cmd.extend(["--restart", restart])
 
         try:
-            with open(os.devnull, "w") as sink:
-                res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
+            res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
         except sp.CalledProcessError as e:
             res = f"ERR:Failed to run new-job script with error {e.output}"
+            raise ValueError(res)
         except Exception as e:
             res = f"ERR:Unexpected error {e}"
+            raise ValueError(res)
 
         if not res.startswith("OK"):
             raise ValueError(res[4:])
