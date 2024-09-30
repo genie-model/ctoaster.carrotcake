@@ -13,13 +13,13 @@ from utils import read_ctoaster_config
 # Initialize the configuration
 read_ctoaster_config()
 
-from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
+from utils import ctoaster_data, ctoaster_jobs, ctoaster_root
 
 app = FastAPI()
 
 # CORS configuration
 origins = [
-    "http://localhost:5001" # for local testing
+    "http://localhost:5001"  # for local testing
     # "http://cupcake.ctoaster.org", # React development server
     # "*" # allowing everything for testing
 ]
@@ -167,6 +167,7 @@ def delete_job():
 
 import shutil
 
+
 @app.post("/add-job")
 async def add_job(request: Request):
     data = await request.json()
@@ -200,25 +201,6 @@ async def add_job(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Could not write configuration file: {str(e)}"
-        )
-
-    # Copy default namelist files
-    try:
-        default_namelist_dir = os.path.join(ctoaster_data, "default-namelists")
-        target_namelist_dir = os.path.join(job_dir, "")
-
-        if os.path.exists(default_namelist_dir):
-            for namelist_file in os.listdir(default_namelist_dir):
-                full_file_path = os.path.join(default_namelist_dir, namelist_file)
-                if os.path.isfile(full_file_path):
-                    shutil.copy(full_file_path, target_namelist_dir)
-        else:
-            raise HTTPException(
-                status_code=500, detail="Default namelist directory not found."
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Could not copy default namelist files: {str(e)}"
         )
 
     return {"status": "success", "message": f"Job '{job_name}' created successfully"}
@@ -480,31 +462,57 @@ async def update_setup(job_name: str, request: Request):
         return {"error": str(e)}
 
 
-#Namelist Apis
+# Namelist Apis
+
 
 @app.get("/jobs/{job_id}/namelists")
 def get_namelists(job_id: str):
-    job_dir = f'/home/ravitheja/ctoaster.carrotcake-jobs/{job_id}'
-    
-    if not os.path.exists(job_dir):
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    namelists = [file[5:] for file in os.listdir(job_dir) if file.startswith('data_')]
+    # List files in job_dir that start with 'data_' and are files
+    namelists = []
+    for filename in os.listdir(job_dir):
+        file_path = os.path.join(job_dir, filename)
+        if filename.startswith("data_") and os.path.isfile(file_path):
+            namelist_name = filename[len("data_") :]  # Remove 'data_' prefix
+            namelists.append(namelist_name)
 
     return {"namelists": namelists}
 
 
 @app.get("/jobs/{job_id}/namelists/{namelist_name}")
 def get_namelist_content(job_id: str, namelist_name: str):
-    job_dir = f'/home/ravitheja/ctoaster.carrotcake-jobs/{job_id}'
-    namelist_file = os.path.join(job_dir, f'{namelist_name}')
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
 
-    print(":: namelist_file is ::", namelist_file)
-    
-    if not os.path.exists(namelist_file):
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Sanitize namelist_name to prevent directory traversal
+    safe_namelist_name = os.path.basename(namelist_name)
+
+    # Construct the filename by adding 'data_' prefix
+    namelist_filename = f"data_{safe_namelist_name}"
+    namelist_file_path = os.path.join(job_dir, namelist_filename)
+
+    if not os.path.isfile(namelist_file_path):
         raise HTTPException(status_code=404, detail="Namelist not found")
 
-    with open(namelist_file, 'r') as file:
-        content = file.read()
+    try:
+        with open(namelist_file_path, "r") as file:
+            content = file.read()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading namelist file: {str(e)}"
+        )
 
-    return {"namelist_name": namelist_name, "content": content}
+    return {"namelist_name": safe_namelist_name, "content": content}
+
