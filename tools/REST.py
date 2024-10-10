@@ -22,7 +22,10 @@ from utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
 app = FastAPI()
 
 # CORS configuration
-origins = ["http://localhost:5001"]  # React development server
+origins = [
+    # "http://localhost:5001"
+      "*"
+           ]  # React development server
 
 app.add_middleware(
     CORSMiddleware,
@@ -671,3 +674,128 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks):
 
     # Start streaming the log file to the client
     return StreamingResponse(log_file_reader(), media_type="text/event-stream")
+
+
+@app.get("/get_data_files_list/{job_name}")
+async def get_data_files_list(job_name: str):
+    if not job_name:
+        raise HTTPException(status_code=400, detail="No job specified")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem")
+    print(":: plot_data_path is ::", plot_data_path)
+
+    data_file_name_prefix = "biogem_series"
+    
+    # List all files in the directory that start with data_file_name_prefix
+    try:
+        data_file_list = [
+            f for f in os.listdir(plot_data_path)
+            if f.startswith(data_file_name_prefix)
+        ]
+        print(":: List of matching files ::", data_file_list)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Plot data path not found")
+    
+    return data_file_list
+
+@app.get("/get-variables/{job_name}/{data_file_name}")
+async def get_variables(job_name: str, data_file_name: str):
+    if not job_name or not data_file_name:
+        raise HTTPException(status_code=400, detail="Job name or data file name is missing")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    # Construct the file path
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem", data_file_name)
+
+    # Check if the file exists
+    if not os.path.isfile(plot_data_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    # Read the file and extract variables from the header line
+    try:
+        with open(plot_data_path, 'r') as file:
+            header_line = file.readline().strip()
+            # Extract variables based on everything that comes after '/' in the header
+            variables = [var.strip() for var in header_line.split('/')][1:]  # Skip the first column
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+    if not variables:
+        raise HTTPException(status_code=404, detail="No variables found in the data file")
+
+    # Return the list of variables directly
+    return variables
+
+
+from pydantic import BaseModel
+
+# Request body model for the POST API
+class PlotDataRequest(BaseModel):
+    job_name: str
+    data_file_name: str
+    variable: str
+
+@app.post("/get-plot-data")
+async def get_plot_data(request: PlotDataRequest):
+    job_name = request.job_name
+    data_file_name = request.data_file_name
+    variable = request.variable
+
+    if not job_name or not data_file_name or not variable:
+        raise HTTPException(status_code=400, detail="Job name, data file, or variable is missing")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    # Construct the file path
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem", data_file_name)
+
+    # Check if the file exists
+    if not os.path.isfile(plot_data_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    # Read the file and extract data for the selected variable
+    try:
+        with open(plot_data_path, 'r') as file:
+            header_line = file.readline().strip()
+            columns = header_line.split('/')  # Split by '/' to match the column names
+            columns = [col.strip() for col in columns]
+
+            # Get the first column name and the index of the selected variable
+            first_column_name = columns[0]  # Use the original first column name
+            if variable not in columns:
+                raise HTTPException(status_code=404, detail="Variable not found in the data file")
+
+            variable_index = columns.index(variable)
+
+            # Read the data lines and extract the values for the first column and selected variable
+            data = []
+            for line in file:
+                parts = line.strip().split()
+                if len(parts) > variable_index:
+                    try:
+                        first_column_value = float(parts[0])  # Value of the first column
+                        data_value = float(parts[variable_index])
+                        data.append([first_column_value, data_value])  # Store as [first_column_value, data_value] pair
+                    except ValueError:
+                        continue  # Skip lines with invalid data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+    if not data:
+        raise HTTPException(status_code=404, detail="No data found for the selected variable")
+
+    # Return the original column names and data
+    return {
+        "columns": [first_column_name, variable],
+        "data": data
+    }
