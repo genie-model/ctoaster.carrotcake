@@ -13,13 +13,15 @@ from utils import read_ctoaster_config
 # Initialize the configuration
 read_ctoaster_config()
 
-from utils import ctoaster_root, ctoaster_jobs, ctoaster_data
+from utils import ctoaster_data, ctoaster_jobs, ctoaster_root
 
 app = FastAPI()
 
 # CORS configuration
-origins = [  
-    "http://localhost:5001"   # React development server
+origins = [
+    "http://localhost:5001"  # for local testing
+    # "http://cupcake.ctoaster.org", # React development server
+    # "*" # allowing everything for testing
 ]
 
 app.add_middleware(
@@ -163,6 +165,9 @@ def delete_job():
     # return {"message": f"Job '{selected_job_name}' deleted successfully"}
 
 
+import shutil
+
+
 @app.post("/add-job")
 async def add_job(request: Request):
     data = await request.json()
@@ -178,6 +183,7 @@ async def add_job(request: Request):
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
+    # Create the job directory
     try:
         os.makedirs(os.path.join(job_dir, "config"))
     except Exception as e:
@@ -185,6 +191,7 @@ async def add_job(request: Request):
             status_code=500, detail=f"Could not create job directory: {str(e)}"
         )
 
+    # Create the main config file
     config_path = os.path.join(job_dir, "config", "config")
     try:
         with open(config_path, "w") as config_file:
@@ -453,3 +460,59 @@ async def update_setup(job_name: str, request: Request):
     except Exception as e:
         logger.error(f"Error updating setup details: {str(e)}")
         return {"error": str(e)}
+
+
+# Namelist Apis
+
+
+@app.get("/jobs/{job_id}/namelists")
+def get_namelists(job_id: str):
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # List files in job_dir that start with 'data_' and are files
+    namelists = []
+    for filename in os.listdir(job_dir):
+        file_path = os.path.join(job_dir, filename)
+        if filename.startswith("data_") and os.path.isfile(file_path):
+            namelist_name = filename[len("data_") :]  # Remove 'data_' prefix
+            namelists.append(namelist_name)
+
+    return {"namelists": namelists}
+
+
+@app.get("/jobs/{job_id}/namelists/{namelist_name}")
+def get_namelist_content(job_id: str, namelist_name: str):
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Sanitize namelist_name to prevent directory traversal
+    safe_namelist_name = os.path.basename(namelist_name)
+
+    # Construct the filename by adding 'data_' prefix
+    namelist_filename = f"data_{safe_namelist_name}"
+    namelist_file_path = os.path.join(job_dir, namelist_filename)
+
+    if not os.path.isfile(namelist_file_path):
+        raise HTTPException(status_code=404, detail="Namelist not found")
+
+    try:
+        with open(namelist_file_path, "r") as file:
+            content = file.read()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading namelist file: {str(e)}"
+        )
+
+    return {"namelist_name": safe_namelist_name, "content": content}
+
