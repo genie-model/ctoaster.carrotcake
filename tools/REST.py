@@ -518,7 +518,7 @@ async def run_job():
             ctoaster_jobs,
             "MODELS",
             ctoaster_version,  # Replace with actual version variable or string
-            sys.platform,  # Dynamically get platform information
+            sys.platform.upper(),  # Dynamically get platform information
             "ship",
             "carrotcake.exe",
         )
