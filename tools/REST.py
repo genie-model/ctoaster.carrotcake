@@ -22,10 +22,7 @@ from utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
 app = FastAPI()
 
 # CORS configuration
-origins = [
-    # "http://localhost:5001"
-      "*"
-           ]  # React development server
+origins = ["http://localhost:5001", "*"]  # React development server
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,6 +180,7 @@ async def add_job(request: Request):
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
+    # Create the job directory
     try:
         os.makedirs(os.path.join(job_dir, "config"))
     except Exception as e:
@@ -190,6 +188,7 @@ async def add_job(request: Request):
             status_code=500, detail=f"Could not create job directory: {str(e)}"
         )
 
+    # Create the main config file
     config_path = os.path.join(job_dir, "config", "config")
     try:
         with open(config_path, "w") as config_file:
@@ -516,7 +515,7 @@ async def run_job():
             ctoaster_jobs,
             "MODELS",
             ctoaster_version,  # Replace with actual version variable or string
-            sys.platform,  # Dynamically get platform information
+            sys.platform.upper(),  # Dynamically get platform information
             "ship",
             "carrotcake.exe",
         )
@@ -676,6 +675,59 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks):
     return StreamingResponse(log_file_reader(), media_type="text/event-stream")
 
 
+# Namelist Apis
+@app.get("/jobs/{job_id}/namelists")
+def get_namelists(job_id: str):
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # List files in job_dir that start with 'data_' and are files
+    namelists = []
+    for filename in os.listdir(job_dir):
+        file_path = os.path.join(job_dir, filename)
+        if filename.startswith("data_") and os.path.isfile(file_path):
+            namelist_name = filename[len("data_") :]  # Remove 'data_' prefix
+            namelists.append(namelist_name)
+
+    return {"namelists": namelists}
+
+
+@app.get("/jobs/{job_id}/namelists/{namelist_name}")
+def get_namelist_content(job_id: str, namelist_name: str):
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_dir = os.path.join(ctoaster_jobs, job_id)
+
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Sanitize namelist_name to prevent directory traversal
+    safe_namelist_name = os.path.basename(namelist_name)
+
+    # Construct the filename by adding 'data_' prefix
+    namelist_filename = f"data_{safe_namelist_name}"
+    namelist_file_path = os.path.join(job_dir, namelist_filename)
+
+    if not os.path.isfile(namelist_file_path):
+        raise HTTPException(status_code=404, detail="Namelist not found")
+
+    try:
+        with open(namelist_file_path, "r") as file:
+            content = file.read()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading namelist file: {str(e)}"
+        )
+
+    return {"namelist_name": safe_namelist_name, "content": content}
+
+
 @app.get("/get_data_files_list/{job_name}")
 async def get_data_files_list(job_name: str):
     if not job_name:
@@ -685,22 +737,47 @@ async def get_data_files_list(job_name: str):
         raise ValueError("ctoaster_jobs is not defined")
 
     job_path = os.path.join(ctoaster_jobs, job_name)
-    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem")
-    print(":: plot_data_path is ::", plot_data_path)
 
-    data_file_name_prefix = "biogem_series"
-    
-    # List all files in the directory that start with data_file_name_prefix
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    print(":: Resolved plot_data_path ::", plot_data_path)
+
     try:
-        data_file_list = [
-            f for f in os.listdir(plot_data_path)
-            if f.startswith(data_file_name_prefix)
-        ]
+        # Log all files in the directory for debugging purposes
+        all_files = os.listdir(plot_data_path)
+        print(":: All files in resolved path ::", all_files)
+
+        # Match files starting with 'biogem_series'
+        data_file_name_prefix = "biogem_series"
+        data_file_list = [f for f in all_files if f.startswith(data_file_name_prefix)]
+
         print(":: List of matching files ::", data_file_list)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Plot data path not found")
-    
-    return data_file_list
+
+        if not data_file_list:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No files found with prefix '{data_file_name_prefix}' in {plot_data_path}",
+            )
+
+        return data_file_list
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching data files: {str(e)}"
+        )
 
 @app.get("/get-variables/{job_name}/{data_file_name}")
 async def get_variables(job_name: str, data_file_name: str):
@@ -710,20 +787,37 @@ async def get_variables(job_name: str, data_file_name: str):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    # Construct the file path
+    # Construct the job path
     job_path = os.path.join(ctoaster_jobs, job_name)
-    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem", data_file_name)
 
-    # Check if the file exists
-    if not os.path.isfile(plot_data_path):
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    # Construct the full path to the data file
+    data_file_path = os.path.join(plot_data_path, data_file_name)
+
+    # Check if the data file exists
+    if not os.path.isfile(data_file_path):
         raise HTTPException(status_code=404, detail="Data file not found")
 
     # Read the file and extract variables from the header line
     try:
-        with open(plot_data_path, 'r') as file:
+        with open(data_file_path, 'r') as file:
             header_line = file.readline().strip()
-            # Extract variables based on everything that comes after '/' in the header
-            variables = [var.strip() for var in header_line.split('/')][1:]  # Skip the first column
+            # Extract variables based on everything after '/' in the header
+            variables = [var.strip() for var in header_line.split('/')[1:]]  # Skip the first column
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
 
@@ -754,17 +848,34 @@ async def get_plot_data(request: PlotDataRequest):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    # Construct the file path
+    # Construct the job path
     job_path = os.path.join(ctoaster_jobs, job_name)
-    plot_data_path = os.path.join(job_path, "basic/biogem/output/biogem", data_file_name)
 
-    # Check if the file exists
-    if not os.path.isfile(plot_data_path):
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    # Construct the full path to the data file
+    data_file_path = os.path.join(plot_data_path, data_file_name)
+
+    # Check if the data file exists
+    if not os.path.isfile(data_file_path):
         raise HTTPException(status_code=404, detail="Data file not found")
 
     # Read the file and extract data for the selected variable
     try:
-        with open(plot_data_path, 'r') as file:
+        with open(data_file_path, 'r') as file:
             header_line = file.readline().strip()
             columns = header_line.split('/')  # Split by '/' to match the column names
             columns = [col.strip() for col in columns]
