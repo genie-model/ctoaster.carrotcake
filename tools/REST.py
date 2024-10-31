@@ -7,7 +7,7 @@ import subprocess as sp
 import sys
 import time
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
 from starlette.responses import StreamingResponse
@@ -47,7 +47,7 @@ def list_jobs():
         jobs = []
         for job in job_list:
             job_path = os.path.join(ctoaster_jobs, job)
-            if os.path.isdir(job_path):
+            if os.path.isdir(job_path) and job.strip() != "MODELS":
                 jobs.append({"name": job, "path": job_path})
         return {"jobs": jobs}
     except Exception as e:
@@ -929,39 +929,28 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
             # Read header and split by '/'
             header_line = file.readline().strip()
             columns = header_line.split('/')  # Adjust delimiter if needed
-            logger.info(f"Raw header columns: {columns}")
-
-            # Trim both the variable and header columns
             trimmed_columns = [trim_variable(col) for col in columns]
             trimmed_variable = trim_variable(variable)
-            logger.info(f"Trimmed header columns: {trimmed_columns}")
-            logger.info(f"Trimmed variable to match: '{trimmed_variable}'")
 
             if trimmed_variable not in trimmed_columns:
                 logger.error(f"Variable '{trimmed_variable}' not found in columns: {trimmed_columns}")
                 raise HTTPException(status_code=404, detail=f"Variable '{variable}' not found in the file")
 
             variable_index = trimmed_columns.index(trimmed_variable)
-            logger.info(f"Variable '{trimmed_variable}' found at index {variable_index}")
 
-            # Step 1: Read all existing data in the file
+            # Step 1: Stream all existing data in the file
             while True:
                 line = file.readline()
                 if not line:
                     break  # Stop when we reach the end of existing data
                 
                 parts = line.strip().split('/')
-                
                 if len(parts) > variable_index:
                     try:
-                        first_column_value = float(parts[0].strip())  # Handle potential spaces
+                        first_column_value = float(parts[0].strip())
                         data_value = float(parts[variable_index].strip())
-                        logger.info(f"Streaming existing data: {first_column_value}, {data_value}")
-                        
-                        # Yield existing data in SSE format
                         yield f"data: {first_column_value},{data_value}\n\n"
                     except ValueError:
-                        logger.warning(f"Skipping invalid data line: {line}")
                         continue  # Skip lines with invalid data
 
             # Step 2: Tail the file for new data
@@ -971,64 +960,44 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
                 if not line:
                     await asyncio.sleep(0.5)  # Sleep briefly to wait for new data
                     continue
-                
+
                 parts = line.strip().split('/')
-                
                 if len(parts) > variable_index:
                     try:
                         first_column_value = float(parts[0].strip())
                         data_value = float(parts[variable_index].strip())
-                        logger.info(f"Streaming new data: {first_column_value}, {data_value}")
-                        
-                        # Yield new data in SSE format
                         yield f"data: {first_column_value},{data_value}\n\n"
                     except ValueError:
-                        logger.warning(f"Skipping invalid data line: {line}")
                         continue  # Skip lines with invalid data
     except HTTPException as http_exc:
-        logger.error(f"HTTP Exception: {http_exc.detail}")
         raise http_exc
     except Exception as e:
-        logger.error(f"Unhandled error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
 
-
-@app.post("/get-plot-data-stream")
-async def post_plot_data(request: PlotDataRequest):
-    """POST API to stream data for plotting."""
-    job_name = request.job_name
-    data_file_name = request.data_file_name
-    variable = request.variable
-    
-    # Assuming 'ctoaster_jobs' is a global variable or pre-configured path
-    logger.info(f"Job name: {job_name}, Data file name: {data_file_name}, Variable: {variable}")
-    logger.info(f"Base path for jobs: {ctoaster_jobs}")
-    
+@app.get("/get-plot-data-stream")
+async def get_plot_data_stream(
+    job_name: str = Query(...),
+    data_file_name: str = Query(...),
+    variable: str = Query(...)
+):
+    """GET API to stream data for plotting in real-time."""
     job_path = os.path.join(ctoaster_jobs, job_name)
-
     if not os.path.isdir(job_path):
-        logger.error(f"Job directory not found: {job_path}")
         raise HTTPException(status_code=404, detail="Job not found")
 
     plot_data_path = None
     for root, dirs, files in os.walk(job_path):
-        logger.info(f"Searching in directory: {root}")
         if "output/biogem" in root:
             plot_data_path = root
-            logger.info(f"Found plot data path: {plot_data_path}")
             break
 
     if not plot_data_path:
-        logger.error(f"Output/biogem path not found in: {job_path}")
         raise HTTPException(status_code=404, detail="Output/biogem path not found")
 
     data_file_path = os.path.join(plot_data_path, data_file_name)
-
     if not os.path.isfile(data_file_path):
-        logger.error(f"Data file not found: {data_file_path}")
         raise HTTPException(status_code=404, detail="Data file not found")
 
-    logger.info(f"Streaming data from file: {data_file_path}")
-    
-    # Use StreamingResponse to return the generator with the right media type
+    # Return streaming response for real-time data
     return StreamingResponse(read_data_file(data_file_path, variable), media_type="text/event-stream")
+
