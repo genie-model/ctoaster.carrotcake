@@ -374,12 +374,10 @@ async def update_setup(job_name: str, request: Request):
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
-            return {"error": "Job not found"}
+            raise HTTPException(status_code=404, detail="Job not found")
 
-        # Update the main config file
-        config_path = os.path.join(job_path, "config", "config")
-        if not os.path.exists(config_path):
-            raise ValueError("Config file not found")
+        # Create the config directory if it doesn't exist
+        os.makedirs(os.path.join(job_path, "config"), exist_ok=True)
 
         # Prepare the updated configuration data
         base_config = data.get("base_config", "")
@@ -390,16 +388,14 @@ async def update_setup(job_name: str, request: Request):
         if restart == "":
             restart = None  # Handle empty string as None
 
+        # Write to the main config file
+        config_path = os.path.join(job_path, "config", "config")
         with open(config_path, "w") as f:
             if base_config:
-                f.write(
-                    f"base_config_dir: {os.path.join(ctoaster_data, 'base-configs')}\n"
-                )
+                f.write(f"base_config_dir: {os.path.join(ctoaster_data, 'base-configs')}\n")
                 f.write(f"base_config: {base_config}\n")
             if user_config:
-                f.write(
-                    f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n"
-                )
+                f.write(f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n")
                 f.write(f"user_config: {user_config}\n")
             if restart is not None:
                 f.write(f"restart: {restart}\n")
@@ -432,6 +428,7 @@ async def update_setup(job_name: str, request: Request):
             job_name,
             str(run_length),
         ]
+        # Include the modifications file using the '-m' flag
         if modifications:
             cmd.extend(["-m", mods_path])
         if restart:
@@ -440,19 +437,19 @@ async def update_setup(job_name: str, request: Request):
         try:
             res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
         except sp.CalledProcessError as e:
-            res = f"ERR:Failed to run new-job script with error {e.output}"
-            raise ValueError(res)
-        except Exception as e:
-            res = f"ERR:Unexpected error {e}"
-            raise ValueError(res)
+            error_message = e.output.strip()
+            logger.error(f"Error generating namelists: {error_message}")
+            raise HTTPException(status_code=500, detail=error_message)
 
         if not res.startswith("OK"):
-            raise ValueError(res[4:])
+            raise HTTPException(status_code=500, detail=res[4:])
 
         return {"message": "Setup updated successfully"}
+    except HTTPException as http_exc:
+        raise http_exc
     except Exception as e:
         logger.error(f"Error updating setup details: {str(e)}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 ## Utility function used in run_job
@@ -487,8 +484,8 @@ async def run_job():
         if not selected_job_name:
             raise HTTPException(status_code=400, detail="No job selected")
 
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
+        if ctoaster_jobs is None or ctoaster_data is None or ctoaster_root is None:
+            raise ValueError("ctoaster_jobs, ctoaster_data, or ctoaster_root is not defined")
 
         job_path = os.path.join(ctoaster_jobs, selected_job_name)
 
@@ -513,6 +510,71 @@ async def run_job():
                 detail=f"Job '{selected_job_name}' is not configured or runnable.",
             )
 
+        # Regenerate the namelists if the job is paused
+        if status == "PAUSED":
+            # Read the setup details from the config file
+            config_path = os.path.join(job_path, "config", "config")
+            if not os.path.exists(config_path):
+                raise HTTPException(status_code=400, detail="Config file not found")
+
+            base_config = ""
+            user_config = ""
+            full_config = ""
+            run_length = "n/a"
+            restart = None
+            t100 = False
+
+            with open(config_path) as f:
+                for line in f:
+                    key, _, value = line.partition(":")
+                    value = value.strip()
+                    if key.strip() == "base_config":
+                        base_config = value
+                    elif key.strip() == "user_config":
+                        user_config = value
+                    elif key.strip() == "full_config":
+                        full_config = value
+                    elif key.strip() == "run_length":
+                        run_length = value
+                    elif key.strip() == "restart":
+                        restart = value if value else None
+                    elif key.strip() == "t100":
+                        t100 = value.lower() == "true"
+
+            # Prepare the modifications
+            mods_path = os.path.join(job_path, "config", "config_mods")
+
+            # Build the command to regenerate namelists
+            new_job_script = os.path.join(ctoaster_root, "tools", "new-job.py")
+            cmd = [sys.executable, new_job_script, "--gui"]
+            if base_config:
+                cmd.extend(["-b", base_config])
+            if user_config:
+                cmd.extend(["-u", user_config])
+            if full_config:
+                cmd.extend(["-c", full_config])
+            if restart:
+                cmd.extend(["-r", restart])
+            if os.path.exists(mods_path):
+                cmd.extend(["-m", mods_path])
+            cmd.extend(["-j", ctoaster_jobs])
+            if t100:
+                cmd.append("--t100")
+            cmd.extend([selected_job_name, str(run_length)])
+
+            # Regenerate the namelists
+            try:
+                res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
+            except sp.CalledProcessError as e:
+                error_message = e.output.strip()
+                logger.error(f"Error regenerating namelists: {error_message}")
+                raise HTTPException(status_code=500, detail=f"Error regenerating namelists: {error_message}")
+
+            if not res.startswith("OK"):
+                logger.error(f"Namelist regeneration failed: {res}")
+                raise HTTPException(status_code=500, detail=f"Namelist regeneration failed: {res[4:]}")
+
+        # Proceed to run the job
         # Correct path to check for the executable
         exe = os.path.join(
             ctoaster_jobs,
