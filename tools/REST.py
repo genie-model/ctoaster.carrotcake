@@ -165,6 +165,8 @@ def delete_job():
     # return {"message": f"Job '{selected_job_name}' deleted successfully"}
 
 
+import shutil
+
 @app.post("/add-job")
 async def add_job(request: Request):
     data = await request.json()
@@ -673,9 +675,9 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks):
 
     # Start streaming the log file to the client
     return StreamingResponse(log_file_reader(), media_type="text/event-stream")
-
-
 # Namelist Apis
+
+
 @app.get("/jobs/{job_id}/namelists")
 def get_namelists(job_id: str):
     if ctoaster_jobs is None:
