@@ -167,10 +167,6 @@ def delete_job():
 
 import shutil
 
-<<<<<<< HEAD
-=======
-
->>>>>>> main
 @app.post("/add-job")
 async def add_job(request: Request):
     data = await request.json()
