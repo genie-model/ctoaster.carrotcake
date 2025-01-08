@@ -7,7 +7,7 @@ import subprocess as sp
 import sys
 import time
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
 from starlette.responses import StreamingResponse
@@ -22,7 +22,7 @@ from utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
 app = FastAPI()
 
 # CORS configuration
-origins = ["http://localhost:5001"]  # React development server
+origins = ["http://localhost:5001", "*"]  # React development server
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,7 +47,7 @@ def list_jobs():
         jobs = []
         for job in job_list:
             job_path = os.path.join(ctoaster_jobs, job)
-            if os.path.isdir(job_path):
+            if os.path.isdir(job_path) and job.strip() != "MODELS":
                 jobs.append({"name": job, "path": job_path})
         return {"jobs": jobs}
     except Exception as e:
@@ -166,7 +166,6 @@ def delete_job():
 
 
 import shutil
-
 
 @app.post("/add-job")
 async def add_job(request: Request):
@@ -729,4 +728,278 @@ def get_namelist_content(job_id: str, namelist_name: str):
         )
 
     return {"namelist_name": safe_namelist_name, "content": content}
+
+
+@app.get("/get_data_files_list/{job_name}")
+async def get_data_files_list(job_name: str):
+    if not job_name:
+        raise HTTPException(status_code=400, detail="No job specified")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = os.path.join(ctoaster_jobs, job_name)
+
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    print(":: Resolved plot_data_path ::", plot_data_path)
+
+    try:
+        # Log all files in the directory for debugging purposes
+        all_files = os.listdir(plot_data_path)
+        print(":: All files in resolved path ::", all_files)
+
+        # Match files starting with 'biogem_series'
+        data_file_name_prefix = "biogem_series"
+        data_file_list = [f for f in all_files if f.startswith(data_file_name_prefix)]
+
+        print(":: List of matching files ::", data_file_list)
+
+        if not data_file_list:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No files found with prefix '{data_file_name_prefix}' in {plot_data_path}",
+            )
+
+        return data_file_list
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching data files: {str(e)}"
+        )
+
+@app.get("/get-variables/{job_name}/{data_file_name}")
+async def get_variables(job_name: str, data_file_name: str):
+    if not job_name or not data_file_name:
+        raise HTTPException(status_code=400, detail="Job name or data file name is missing")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    # Construct the job path
+    job_path = os.path.join(ctoaster_jobs, job_name)
+
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    # Construct the full path to the data file
+    data_file_path = os.path.join(plot_data_path, data_file_name)
+
+    # Check if the data file exists
+    if not os.path.isfile(data_file_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    # Read the file and extract variables from the header line
+    try:
+        with open(data_file_path, 'r') as file:
+            header_line = file.readline().strip()
+            # Extract variables based on everything after '/' in the header
+            variables = [var.strip() for var in header_line.split('/')[1:]]  # Skip the first column
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+    if not variables:
+        raise HTTPException(status_code=404, detail="No variables found in the data file")
+
+    # Return the list of variables directly
+    return variables
+
+
+from pydantic import BaseModel
+
+# Request body model for the POST API
+class PlotDataRequest(BaseModel):
+    job_name: str
+    data_file_name: str
+    variable: str
+
+@app.post("/get-plot-data")
+async def get_plot_data(request: PlotDataRequest):
+    job_name = request.job_name
+    data_file_name = request.data_file_name
+    variable = request.variable
+
+    if not job_name or not data_file_name or not variable:
+        raise HTTPException(status_code=400, detail="Job name, data file, or variable is missing")
+
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    # Construct the job path
+    job_path = os.path.join(ctoaster_jobs, job_name)
+
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
+
+    # Construct the full path to the data file
+    data_file_path = os.path.join(plot_data_path, data_file_name)
+
+    # Check if the data file exists
+    if not os.path.isfile(data_file_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    # Read the file and extract data for the selected variable
+    try:
+        with open(data_file_path, 'r') as file:
+            header_line = file.readline().strip()
+            columns = header_line.split('/')  # Split by '/' to match the column names
+            columns = [col.strip() for col in columns]
+
+            # Get the first column name and the index of the selected variable
+            first_column_name = columns[0]  # Use the original first column name
+            if variable not in columns:
+                raise HTTPException(status_code=404, detail="Variable not found in the data file")
+
+            variable_index = columns.index(variable)
+
+            # Read the data lines and extract the values for the first column and selected variable
+            data = []
+            for line in file:
+                parts = line.strip().split()
+                if len(parts) > variable_index:
+                    try:
+                        first_column_value = float(parts[0])  # Value of the first column
+                        data_value = float(parts[variable_index])
+                        data.append([first_column_value, data_value])  # Store as [first_column_value, data_value] pair
+                    except ValueError:
+                        continue  # Skip lines with invalid data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+    if not data:
+        raise HTTPException(status_code=404, detail="No data found for the selected variable")
+
+    # Return the original column names and data
+    return {
+        "columns": [first_column_name, variable],
+        "data": data
+    }
+
+from typing import Generator
+from fastapi.responses import StreamingResponse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def trim_variable(variable: str) -> str:
+    """Trim and normalize the variable by removing leading/trailing spaces."""
+    return variable.strip()
+
+async def read_data_file(file_path: str, variable: str) -> Generator[str, None, None]:
+    """Generator function to yield existing and new data as it is written to the file."""
+    try:
+        with open(file_path, 'r') as file:
+            # Read header and split by '/'
+            header_line = file.readline().strip()
+            columns = header_line.split('/')  # Adjust delimiter if needed
+            trimmed_columns = [trim_variable(col) for col in columns]
+            trimmed_variable = trim_variable(variable)
+
+            if trimmed_variable not in trimmed_columns:
+                logger.error(f"Variable '{trimmed_variable}' not found in columns: {trimmed_columns}")
+                raise HTTPException(status_code=404, detail=f"Variable '{variable}' not found in the file")
+
+            variable_index = trimmed_columns.index(trimmed_variable)
+
+            # Step 1: Stream all existing data in the file
+            while True:
+                line = file.readline()
+                if not line:
+                    break  # Stop when we reach the end of existing data
+                
+                parts = line.strip().split('/')
+                if len(parts) > variable_index:
+                    try:
+                        first_column_value = float(parts[0].strip())
+                        data_value = float(parts[variable_index].strip())
+                        yield f"data: {first_column_value},{data_value}\n\n"
+                    except ValueError:
+                        continue  # Skip lines with invalid data
+
+            # Step 2: Tail the file for new data
+            file.seek(0, os.SEEK_END)  # Move to the end of the file to start tailing
+            while True:
+                line = file.readline()
+                if not line:
+                    await asyncio.sleep(0.5)  # Sleep briefly to wait for new data
+                    continue
+
+                parts = line.strip().split('/')
+                if len(parts) > variable_index:
+                    try:
+                        first_column_value = float(parts[0].strip())
+                        data_value = float(parts[variable_index].strip())
+                        yield f"data: {first_column_value},{data_value}\n\n"
+                    except ValueError:
+                        continue  # Skip lines with invalid data
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+@app.get("/get-plot-data-stream")
+async def get_plot_data_stream(
+    job_name: str = Query(...),
+    data_file_name: str = Query(...),
+    variable: str = Query(...)
+):
+    """GET API to stream data for plotting in real-time."""
+    job_path = os.path.join(ctoaster_jobs, job_name)
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(status_code=404, detail="Output/biogem path not found")
+
+    data_file_path = os.path.join(plot_data_path, data_file_name)
+    if not os.path.isfile(data_file_path):
+        raise HTTPException(status_code=404, detail="Data file not found")
+
+    # Return streaming response for real-time data
+    return StreamingResponse(read_data_file(data_file_path, variable), media_type="text/event-stream")
 
