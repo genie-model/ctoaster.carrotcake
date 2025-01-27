@@ -1,43 +1,40 @@
-# Use a multi-stage build to create a platform-independent image
-FROM --platform=$BUILDPLATFORM continuumio/miniconda3:latest AS build
+# Use a lightweight Python image
+FROM python:3.10-slim
 
-# Set build arguments
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
+# Set environment variables to avoid Python buffering
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install necessary build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create and activate the conda environment
-RUN conda create --name myproject python=3.8 -y
-SHELL ["conda", "run", "-n", "myproject", "/bin/bash", "-c"]
-
-# Install netcdf-fortran using apt-get
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libnetcdf-dev \
-    libnetcdff-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install scons and matplotlib using pip
-RUN pip install --no-cache-dir scons matplotlib
-
-# Clone the ctoaster.carrotcake repository
-RUN git clone https://github.com/derpycode/ctoaster.carrotcake.git
+# Set the working directory in the container
 WORKDIR /ctoaster.carrotcake
 
-# Create the final image
-FROM continuumio/miniconda3:latest
+# Install required system packages (e.g., git)
+RUN apt-get update && apt-get install -y git && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy the conda environment from the build stage
-COPY --from=build /opt/conda/envs/myproject /opt/conda/envs/myproject
+# Copy the application code and tools directory
+COPY tools /ctoaster.carrotcake/tools
+COPY requirements.txt /ctoaster.carrotcake/
 
-# Activate the conda environment
-SHELL ["conda", "run", "-n", "myproject", "/bin/bash", "-c"]
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the project files
-COPY --from=build /ctoaster.carrotcake /ctoaster.carrotcake
-WORKDIR /ctoaster.carrotcake
+# Add the working directory to PYTHONPATH
+ENV PYTHONPATH=/ctoaster.carrotcake
 
-# Set any necessary environment variables
+# Create required directories
+RUN mkdir -p /ctoaster.carrotcake-data \
+    && mkdir -p /ctoaster.carrotcake-test \
+    && mkdir -p /ctoaster.carrotcake-jobs
+
+# Clone the required repositories
+RUN git clone https://github.com/genie-model/ctoaster-data /ctoaster.carrotcake-data \
+    && git clone https://github.com/genie-model/ctoaster-test /ctoaster.carrotcake-test
+
+# Create the hidden .ctoasterrc file with the configuration
+RUN echo "ctoaster_root: /ctoaster.carrotcake\nctoaster_data: /ctoaster.carrotcake-data\nctoaster_test: /ctoaster.carrotcake-test\nctoaster_jobs: /ctoaster.carrotcake-jobs\nctoaster_version: DEVELOPMENT" > /root/.ctoasterrc
+
+# Expose the port the FastAPI server runs on
+EXPOSE 8000
+
+# Command to run the FastAPI server
+CMD ["uvicorn", "tools.REST:app", "--host", "0.0.0.0", "--port", "8000"]

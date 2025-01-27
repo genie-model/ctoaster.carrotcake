@@ -12,12 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
 from starlette.responses import StreamingResponse
 
-from utils import read_ctoaster_config
+from tools.utils import read_ctoaster_config
 
 # Initialize the configuration
 read_ctoaster_config()
 
-from utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
+# Ensure global variables are initialized
+if not read_ctoaster_config():
+    raise RuntimeError("Failed to read ctoaster configuration")
+
+from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
 
 app = FastAPI()
 
