@@ -1,50 +1,119 @@
-# carrotcake
-(cGENIE varient)
-(also known as cTOASTER -- the carbon Turnover in Ocean, Atmosphere, Sediment, and Terrestrial Exchangeable Reservoirs model)
+# Carrotcake
+
+**Carrotcake** is a variant of **cGENIE** (also known as **cTOASTER** — the **Carbon Turnover in Ocean, Atmosphere, Sediment, and Terrestrial Exchangeable Reservoirs** model). It is designed to simulate and analyze carbon turnover across various Earth system reservoirs.
+
+---
+
+## Setup Instructions
+
+### Prerequisites
+
+1. **Install Docker**  
+   Follow the official Docker installation guide for your platform:  
+   [Docker Installation Guide](https://docs.docker.com/engine/install/)
+
+2. **Install Google Cloud SDK**  
+   Install the Google Cloud SDK for your operating system:  
+   [Google Cloud SDK Installation Guide](https://cloud.google.com/sdk/docs/install)
+
+---
+
+## Docker Commands
+
+### 1. Building the Docker Image
+
+To build the Docker image, run the following command:
+
+```
+docker build -t ctoaster-backend:1.0 .
+```
+2. Running the Docker Image
+To run the Docker container in detached mode, use:
+
+```
+docker run -d --name ctoaster-backend-container -p 8000:8000 ctoaster-backend:1.0
+```
+3. Checking Container Logs
+To monitor the logs of the running container:
+
+List all running containers:
+
+```
+docker container ls
+```
+# or
+```
+docker ps
+```
+Check the logs using the container ID:
+
+```
+docker logs <container_id>
+```
+4. Pushing the Docker Image to Google Container Registry
+To upload the Docker image to Google Container Registry:
+
+Authenticate with Google Cloud:
+
+```
+gcloud auth login
+```
+```
+gcloud auth configure-docker
+```
+
+Tag the Docker image:
+
+```
+docker tag ctoaster-backend:1.0 us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+```
 
 
-Docker Commands:
+Push the Docker image:
 
-1. docker build -t ctoaster-backend:1.0 .
+```
+docker push us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+```
+5. Pulling the Docker Image
+To pull the Docker image from Google Container Registry:
 
-2. docker run -d -p 8000:8000 \
-  -v /home/ravitheja/ctoaster.carrotcake-jobs:/home/ravitheja/ctoaster.carrotcake-jobs \
-  -v /home/ravitheja/ctoaster.carrotcake-data:/home/ravitheja/ctoaster.carrotcake-data \
-  -v /home/ravitheja/ctoaster.carrotcake-test:/home/ravitheja/ctoaster.carrotcake-test \
-  ctoaster-backend:1.0
+```
+docker pull us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+```
+6. Listing Existing Docker Images
+To list all Docker images in the cupcake folder of your Google Container Registry:
 
-3. docker logs <container_id>
+```
+gcloud artifacts docker images list us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend
+```
 
-4. Pushing the image:
+7. Deleting a Docker Image
+To delete a Docker image from Google Container Registry:
 
-    # Authenticate with Google Cloud
-    gcloud auth login
-    gcloud auth configure-docker
+Authenticate with Google Cloud:
 
-    # Tag the Docker image
-    docker tag ctoaster-backend:1.0 us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+```
+gcloud auth login
+```
 
-    # Push the Docker image
-    docker push us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+```
+gcloud auth configure-docker
+```
 
-    # Pull the Docker image
-    docker pull us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+List repositories:
 
-    # Verify the image
-    gcloud artifacts docker images list us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend
+```
+gcloud artifacts repositories list
+```
 
-5. Deleting the image:
+List Docker images:
 
-    # Authenticate with Google Cloud
-    gcloud auth login
-    gcloud auth configure-docker
+```
+gcloud artifacts docker images list us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake
+```
 
+Delete the Docker image:
 
-    a. gcloud artifacts repositories list
-    b. gcloud artifacts docker images list \
-    us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake
-    c. gcloud artifacts docker images delete \
-    us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0 \
-    --quiet
- 
- 6. 
+```
+gcloud artifacts docker images delete us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0 --quiet
+```
