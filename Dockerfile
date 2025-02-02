@@ -8,12 +8,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Set the working directory in the container
 WORKDIR /ctoaster.carrotcake
 
-# Install required system packages (e.g., git)
-RUN apt-get update && apt-get install -y git && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install required system packages (git, net-tools)
+RUN apt-get update && apt-get install -y git net-tools \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy the application code and tools directory
-COPY tools /ctoaster.carrotcake/tools
-COPY requirements.txt /ctoaster.carrotcake/
+# Copy the entire project, including the .git folder
+COPY . /ctoaster.carrotcake
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
