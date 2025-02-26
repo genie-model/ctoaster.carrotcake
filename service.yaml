@@ -1,0 +1,13 @@
+# service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ctoaster-backend-service
+spec:
+  selector:
+    app: ctoaster-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer  # Changed from ClusterIP to LoadBalancer
