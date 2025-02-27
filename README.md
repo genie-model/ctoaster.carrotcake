@@ -212,7 +212,7 @@ kind: Service
 metadata:
   name: ctoaster-backend-service
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
     - port: 80
       targetPort: 8000
@@ -240,46 +240,19 @@ NAME                                           READY   STATUS    RESTARTS   AGE
 ctoaster-backend-deployment-xyz123              1/1     Running   0          10s
 ```
 
-Since the backend is using `ClusterIP`, it will not have an external IP. If you need an external API, expose it using a **LoadBalancer** or **Ingress**.
-
----
-
-## 🌐 **3. Accessing the CTOASTER Backend**
-
-Since this is a **ClusterIP** service, it is only accessible inside the cluster.
-
-To access it locally, you can **port-forward**:
-
+To get the external IP of the backend service:
 ```bash
-kubectl port-forward service/ctoaster-backend-service 8000:80
+kubectl get svc ctoaster-backend-service
+```
+Expected output:
+```
+NAME                        TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)        AGE
+ctoaster-backend-service    LoadBalancer   34.118.234.130  35.235.72.29    80:31234/TCP   5m
 ```
 
-Now, you can access the API at:
-
+You can now access the API at:
 ```
-http://localhost:8000
-```
-
-If needed, change the service type to `LoadBalancer` for an external IP:
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: ctoaster-backend-service
-spec:
-  type: LoadBalancer
-  ports:
-    - port: 80
-      targetPort: 8000
-  selector:
-    app: ctoaster-backend
-```
-
-Then, redeploy and check for an external IP:
-
-```bash
-kubectl get svc
+http://35.235.72.29
 ```
 
 ---
@@ -301,7 +274,7 @@ kubectl logs -f <pod-name>
 kubectl describe deployment ctoaster-backend-deployment
 ```
 
-4. **Check service and external IP (if applicable):**
+4. **Check service and external IP:**
 ```bash
 kubectl get svc
 ```
@@ -328,4 +301,4 @@ For any issues or further assistance:
 
 ---
 
-🎉 **That's it! Your CTOASTER Backend is now running on Kubernetes!** 🚀🔥
+🎉 **That's it! Your CTOASTER Backend is now running on Kubernetes with a LoadBalancer service!** 🚀🔥
