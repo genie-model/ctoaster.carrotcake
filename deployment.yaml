@@ -1,0 +1,24 @@
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ctoaster-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ctoaster-backend
+  template:
+    metadata:
+      labels:
+        app: ctoaster-backend
+    spec:
+      containers:
+        - name: ctoaster-backend
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: "production"
