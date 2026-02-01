@@ -26,12 +26,19 @@ from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_ve
 app = FastAPI()
 
 # CORS configuration
-origins = ["http://localhost:5001", "*"]  # React development server
+origins = [
+    "http://localhost:3000",  # React development server (local dev)
+    "http://localhost:5000",
+    "http://localhost:5001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:8000",
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=False,  # Changed to False - not needed for this API
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -950,11 +957,11 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
                 if not line:
                     break  # Stop when we reach the end of existing data
                 
-                parts = line.strip().split('/')
+                parts = line.strip().split()  # Use whitespace delimiter (same as POST endpoint)
                 if len(parts) > variable_index:
                     try:
-                        first_column_value = float(parts[0].strip())
-                        data_value = float(parts[variable_index].strip())
+                        first_column_value = float(parts[0])
+                        data_value = float(parts[variable_index])
                         yield f"data: {first_column_value},{data_value}\n\n"
                     except ValueError:
                         continue  # Skip lines with invalid data
@@ -967,11 +974,11 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
                     await asyncio.sleep(0.5)  # Sleep briefly to wait for new data
                     continue
 
-                parts = line.strip().split('/')
+                parts = line.strip().split()  # Use whitespace delimiter (same as POST endpoint)
                 if len(parts) > variable_index:
                     try:
-                        first_column_value = float(parts[0].strip())
-                        data_value = float(parts[variable_index].strip())
+                        first_column_value = float(parts[0])
+                        data_value = float(parts[variable_index])
                         yield f"data: {first_column_value},{data_value}\n\n"
                     except ValueError:
                         continue  # Skip lines with invalid data
