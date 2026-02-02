@@ -925,7 +925,9 @@ async def get_plot_data(request: PlotDataRequest):
     }
 
 from typing import Generator
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+import tempfile
+import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -934,6 +936,14 @@ logger = logging.getLogger(__name__)
 def trim_variable(variable: str) -> str:
     """Trim and normalize the variable by removing leading/trailing spaces."""
     return variable.strip()
+
+def safe_join(base: str, *paths: str) -> str:
+    """Join paths safely to prevent directory traversal."""
+    final = os.path.abspath(os.path.join(base, *paths))
+    base_abs = os.path.abspath(base)
+    if not final.startswith(base_abs + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid job name")
+    return final
 
 async def read_data_file(file_path: str, variable: str) -> Generator[str, None, None]:
     """Generator function to yield existing and new data as it is written to the file."""
@@ -986,6 +996,37 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
         raise http_exc
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+
+@app.get("/jobs/{job_name}/download")
+async def download_job_zip(job_name: str, background_tasks: BackgroundTasks):
+    """
+    Package the entire job directory into a zip and stream it back.
+    """
+    if not job_name:
+        raise HTTPException(status_code=400, detail="Job name is required")
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = safe_join(ctoaster_jobs, job_name)
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Create a temporary directory to hold the archive
+    tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
+    zip_base = os.path.join(tmpdir, job_name)
+    archive_path = shutil.make_archive(zip_base, "zip", job_path)
+
+    # Cleanup temp dir after response is sent
+    def _cleanup():
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    background_tasks.add_task(_cleanup)
+
+    return FileResponse(
+        path=archive_path,
+        media_type="application/zip",
+        filename=f"{job_name}.zip",
+        background=background_tasks,
+    )
 
 @app.get("/get-plot-data-stream")
 async def get_plot_data_stream(
