@@ -97,7 +97,7 @@ def get_job_details(job_name: str):
 
         # Determine run length and T100 from the config file
         run_length = "n/a"
-        t100 = "n/a"
+        t100 = False
         config_path = os.path.join(job_path, "config", "config")
         if os.path.exists(config_path):
             with open(config_path) as f:
