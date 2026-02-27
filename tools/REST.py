@@ -1,13 +1,20 @@
 import asyncio
+import base64
 import datetime
+import hashlib
+import hmac
+import json
 import logging
 import os
+import secrets
 import shutil
+import sqlite3
 import subprocess as sp
 import sys
 import time
+from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
 from starlette.responses import StreamingResponse
@@ -22,6 +29,13 @@ if not read_ctoaster_config():
     raise RuntimeError("Failed to read ctoaster configuration")
 
 from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
+
+# Auth constants (define before use)
+JWT_SECRET = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
+TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
+USER_DB_FILENAME = "users.db"
+
+USER_DB_PATH = os.path.join(ctoaster_root, USER_DB_FILENAME) if ctoaster_root else os.path.join(os.getcwd(), USER_DB_FILENAME)
 
 app = FastAPI()
 
@@ -47,9 +61,224 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === Auth / user storage ===
+def init_user_db():
+    dir_path = os.path.dirname(USER_DB_PATH)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+    conn = sqlite3.connect(USER_DB_PATH)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+def hash_password(password: str, salt_b64: Optional[str] = None) -> Tuple[str, str]:
+    salt = _b64url_decode(salt_b64) if salt_b64 else secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+    return _b64url_encode(salt), _b64url_encode(dk)
+
+
+def verify_password(password: str, salt_b64: str, hash_b64: str) -> bool:
+    _, computed_hash = hash_password(password, salt_b64)
+    return hmac.compare_digest(computed_hash, hash_b64)
+
+
+def generate_token(user_id: int, email: str) -> str:
+    payload = {
+        "uid": user_id,
+        "email": email,
+        "exp": int(time.time()) + TOKEN_TTL_SECONDS,
+    }
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(JWT_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
+    return f"{_b64url_encode(payload_bytes)}.{_b64url_encode(sig)}"
+
+
+def decode_token(token: str) -> dict:
+    try:
+        payload_b64, sig_b64 = token.split(".")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token format")
+    payload_bytes = _b64url_decode(payload_b64)
+    expected_sig = hmac.new(JWT_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
+    if not hmac.compare_digest(expected_sig, _b64url_decode(sig_b64)):
+        raise HTTPException(status_code=401, detail="Invalid token signature")
+    payload = json.loads(payload_bytes.decode("utf-8"))
+    if payload.get("exp", 0) < int(time.time()):
+        raise HTTPException(status_code=401, detail="Token expired")
+    return payload
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    conn = sqlite3.connect(USER_DB_PATH)
+    try:
+        cur = conn.execute(
+            "SELECT id, email, password_hash, salt, created_at FROM users WHERE email = ?",
+            (email,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "email": row[1],
+            "password_hash": row[2],
+            "salt": row[3],
+            "created_at": row[4],
+        }
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    conn = sqlite3.connect(USER_DB_PATH)
+    try:
+        cur = conn.execute(
+            "SELECT id, email, password_hash, salt, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "email": row[1],
+            "password_hash": row[2],
+            "salt": row[3],
+            "created_at": row[4],
+        }
+    finally:
+        conn.close()
+
+
+def create_user(email: str, password: str) -> dict:
+    existing = get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=400, detail="User already exists")
+    salt_b64, hash_b64 = hash_password(password)
+    conn = sqlite3.connect(USER_DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+            (
+                email,
+                hash_b64,
+                salt_b64,
+                datetime.datetime.utcnow().isoformat() + "Z",
+            ),
+        )
+        conn.commit()
+        user_id = cur.lastrowid
+    finally:
+        conn.close()
+    return {"id": user_id, "email": email}
+
+
+def get_current_user(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = auth_header.split(" ", 1)[1].strip()
+    payload = decode_token(token)
+    user = get_user_by_id(payload["uid"])
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def safe_join(base: str, *paths: str) -> str:
+    final = os.path.abspath(os.path.join(base, *paths))
+    base_abs = os.path.abspath(base)
+    if not final.startswith(base_abs + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return final
+
+
+def get_job_path(job_name: str) -> str:
+    if not job_name:
+        raise HTTPException(status_code=400, detail="Job name is required")
+    return safe_join(ctoaster_jobs, job_name)
+
+
+def ensure_job_owner(job_path: str, user: dict):
+    owner_file = os.path.join(job_path, "owner.json")
+    if not os.path.exists(owner_file):
+        raise HTTPException(status_code=403, detail="Job is not owned by this user")
+    try:
+        with open(owner_file) as f:
+            owner = json.load(f)
+    except Exception:
+        raise HTTPException(status_code=403, detail="Job ownership unreadable")
+    if str(owner.get("user_id")) != str(user["id"]):
+        raise HTTPException(status_code=403, detail="Job is not owned by this user")
+
+
+def write_job_owner(job_path: str, user: dict):
+    owner_file = os.path.join(job_path, "owner.json")
+    with open(owner_file, "w") as f:
+        json.dump({"user_id": user["id"], "email": user["email"]}, f)
+
+
+# Track selected job per user to preserve existing UI contract
+selected_job_name_by_user: Dict[int, Optional[str]] = {}
+
+init_user_db()
+
+
+@app.post("/auth/register")
+async def register(request: Request):
+    data = await request.json()
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    user = create_user(email, password)
+    token = generate_token(user["id"], user["email"])
+    return {"user": user, "token": token}
+
+
+@app.post("/auth/login")
+async def login(request: Request):
+    data = await request.json()
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    user = get_user_by_email(email)
+    if not user or not verify_password(password, user["salt"], user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = generate_token(user["id"], user["email"])
+    return {"user": {"id": user["id"], "email": user["email"]}, "token": token}
+
+
+@app.get("/auth/me")
+def me(current_user=Depends(get_current_user)):
+    return {"user": {"id": current_user["id"], "email": current_user["email"]}}
+
 
 @app.get("/jobs")
-def list_jobs():
+def list_jobs(current_user=Depends(get_current_user)):
     try:
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
@@ -57,34 +286,32 @@ def list_jobs():
         job_list = os.listdir(ctoaster_jobs)
         jobs = []
         for job in job_list:
-            job_path = os.path.join(ctoaster_jobs, job)
+            job_path = get_job_path(job)
             if os.path.isdir(job_path) and job.strip() != "MODELS":
+                try:
+                    ensure_job_owner(job_path, current_user)
+                except HTTPException:
+                    continue
                 jobs.append({"name": job, "path": job_path})
         return {"jobs": jobs}
     except Exception as e:
         return {"error": str(e)}
 
 
-# Global variable to store the currently selected job name
-selected_job_name = None
-
-# Global variable to store the currently selected job name
-selected_job_name = None
-
-
 @app.get("/job/{job_name}")
-def get_job_details(job_name: str):
-    global selected_job_name
-    selected_job_name = job_name  # Store the selected job name
+def get_job_details(job_name: str, current_user=Depends(get_current_user)):
     try:
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, job_name)
+        job_path = get_job_path(job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
+
+        ensure_job_owner(job_path, current_user)
+        selected_job_name_by_user[current_user["id"]] = job_name
 
         # Determine job status
         status = "UNCONFIGURED"
@@ -124,20 +351,22 @@ def get_job_details(job_name: str):
 
 
 @app.delete("/delete-job")
-def delete_job():
-    global selected_job_name
+def delete_job(current_user=Depends(get_current_user)):
     try:
+        selected_job_name = selected_job_name_by_user.get(current_user["id"])
         if not selected_job_name:
             raise HTTPException(status_code=400, detail="No job selected")
 
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+        job_path = get_job_path(selected_job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
+
+        ensure_job_owner(job_path, current_user)
 
         # Delete the job directory
         shutil.rmtree(job_path)
@@ -145,7 +374,7 @@ def delete_job():
         local_job_name = selected_job_name
 
         # Clear the selected job name
-        selected_job_name = None
+        selected_job_name_by_user[current_user["id"]] = None
 
         logger.info(f"Job deleted: {job_path}")
         return {"message": f"Job '{local_job_name}' deleted successfully"}
@@ -179,7 +408,7 @@ def delete_job():
 import shutil
 
 @app.post("/add-job")
-async def add_job(request: Request):
+async def add_job(request: Request, current_user=Depends(get_current_user)):
     data = await request.json()
     job_name = data.get("job_name")
 
@@ -189,7 +418,7 @@ async def add_job(request: Request):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = os.path.join(ctoaster_jobs, job_name)
+    job_dir = get_job_path(job_name)
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
@@ -213,19 +442,26 @@ async def add_job(request: Request):
             status_code=500, detail=f"Could not write configuration file: {str(e)}"
         )
 
+    # Tag ownership
+    write_job_owner(job_dir, current_user)
+
+    selected_job_name_by_user[current_user["id"]] = job_name
+
     return {"status": "success", "message": f"Job '{job_name}' created successfully"}
 
 
 @app.get("/run-segments/{job_name}")
-def get_run_segments(job_name: str):
+def get_run_segments(job_name: str, current_user=Depends(get_current_user)):
     try:
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, job_name)
+        job_path = get_job_path(job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
+
+        ensure_job_owner(job_path, current_user)
 
         segments_dir = os.path.join(job_path, "config", "segments")
 
@@ -302,7 +538,7 @@ def get_user_configs():
 
 
 @app.get("/completed-jobs")
-async def get_completed_jobs():
+async def get_completed_jobs(current_user=Depends(get_current_user)):
     try:
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
@@ -310,8 +546,12 @@ async def get_completed_jobs():
         completed_jobs = []
         # Iterate over all jobs in the jobs directory
         for job_name in os.listdir(ctoaster_jobs):
-            job_path = os.path.join(ctoaster_jobs, job_name)
+            job_path = get_job_path(job_name)
             if os.path.isdir(job_path):
+                try:
+                    ensure_job_owner(job_path, current_user)
+                except HTTPException:
+                    continue
                 status_file = os.path.join(job_path, "status")
                 if os.path.exists(status_file):
                     status_parts = read_status_file(job_path)
@@ -325,16 +565,18 @@ async def get_completed_jobs():
 
 
 @app.get("/setup/{job_name}")
-def get_setup(job_name: str):
+def get_setup(job_name: str, current_user=Depends(get_current_user)):
     try:
         if ctoaster_jobs is None or ctoaster_data is None:
             raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, job_name)
+        job_path = get_job_path(job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
+
+        ensure_job_owner(job_path, current_user)
 
         # Read the setup details from the config file
         config_path = os.path.join(job_path, "config", "config")
@@ -374,17 +616,19 @@ def get_setup(job_name: str):
 
 
 @app.post("/setup/{job_name}")
-async def update_setup(job_name: str, request: Request):
+async def update_setup(job_name: str, request: Request, current_user=Depends(get_current_user)):
     try:
         data = await request.json()
         if ctoaster_jobs is None or ctoaster_data is None:
             raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, job_name)
+        job_path = get_job_path(job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
+
+        ensure_job_owner(job_path, current_user)
 
         # Update the main config file
         config_path = os.path.join(job_path, "config", "config")
@@ -491,19 +735,21 @@ def read_status_file(job_dir):
 
 
 @app.post("/run-job")
-async def run_job():
-    global selected_job_name
+async def run_job(current_user=Depends(get_current_user)):
     try:
+        selected_job_name = selected_job_name_by_user.get(current_user["id"])
         if not selected_job_name:
             raise HTTPException(status_code=400, detail="No job selected")
 
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+        job_path = get_job_path(selected_job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
+
+        ensure_job_owner(job_path, current_user)
 
         # Check if the job is in a runnable state
         status = "UNCONFIGURED"
@@ -582,19 +828,21 @@ async def run_job():
 
 
 @app.post("/pause-job")
-async def pause_job():
-    global selected_job_name
+async def pause_job(current_user=Depends(get_current_user)):
     try:
+        selected_job_name = selected_job_name_by_user.get(current_user["id"])
         if not selected_job_name:
             raise HTTPException(status_code=400, detail="No job selected")
 
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = os.path.join(ctoaster_jobs, selected_job_name)
+        job_path = get_job_path(selected_job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
+
+        ensure_job_owner(job_path, current_user)
 
         # Check if the job is currently running or paused
         status_file_path = os.path.join(job_path, "status")
@@ -619,14 +867,15 @@ async def pause_job():
 
 
 @app.get("/get-log/{job_name}")
-async def get_log(job_name: str):
+async def get_log(job_name: str, current_user=Depends(get_current_user)):
     if not job_name:
         raise HTTPException(status_code=400, detail="No job specified")
 
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
+    ensure_job_owner(job_path, current_user)
     log_file_path = os.path.join(job_path, "run.log")
 
     if not os.path.exists(log_file_path):
@@ -643,7 +892,7 @@ async def get_log(job_name: str):
 
 # SSE endpoint to stream job output
 @app.get("/stream-output/{job_name}")
-async def stream_output(job_name: str, background_tasks: BackgroundTasks):
+async def stream_output(job_name: str, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
     """
     Stream the output of the specified job using Server-Sent Events (SSE).
     """
@@ -653,7 +902,8 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
+    ensure_job_owner(job_path, current_user)
     log_file_path = os.path.join(job_path, "run.log")
 
     # Wait for the log file to be created (retry mechanism)
@@ -690,14 +940,16 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks):
 
 
 @app.get("/jobs/{job_id}/namelists")
-def get_namelists(job_id: str):
+def get_namelists(job_id: str, current_user=Depends(get_current_user)):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = os.path.join(ctoaster_jobs, job_id)
+    job_dir = get_job_path(job_id)
 
     if not os.path.isdir(job_dir):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_dir, current_user)
 
     # List files in job_dir that start with 'data_' and are files
     namelists = []
@@ -711,14 +963,16 @@ def get_namelists(job_id: str):
 
 
 @app.get("/jobs/{job_id}/namelists/{namelist_name}")
-def get_namelist_content(job_id: str, namelist_name: str):
+def get_namelist_content(job_id: str, namelist_name: str, current_user=Depends(get_current_user)):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = os.path.join(ctoaster_jobs, job_id)
+    job_dir = get_job_path(job_id)
 
     if not os.path.isdir(job_dir):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_dir, current_user)
 
     # Sanitize namelist_name to prevent directory traversal
     safe_namelist_name = os.path.basename(namelist_name)
@@ -742,17 +996,19 @@ def get_namelist_content(job_id: str, namelist_name: str):
 
 
 @app.get("/get_data_files_list/{job_name}")
-async def get_data_files_list(job_name: str):
+async def get_data_files_list(job_name: str, current_user=Depends(get_current_user)):
     if not job_name:
         raise HTTPException(status_code=400, detail="No job specified")
 
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
 
     # Search for 'output/biogem' folder specifically
     plot_data_path = None
@@ -793,7 +1049,7 @@ async def get_data_files_list(job_name: str):
         )
 
 @app.get("/get-variables/{job_name}/{data_file_name}")
-async def get_variables(job_name: str, data_file_name: str):
+async def get_variables(job_name: str, data_file_name: str, current_user=Depends(get_current_user)):
     if not job_name or not data_file_name:
         raise HTTPException(status_code=400, detail="Job name or data file name is missing")
 
@@ -801,10 +1057,12 @@ async def get_variables(job_name: str, data_file_name: str):
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
 
     # Search for 'output/biogem' folder specifically
     plot_data_path = None
@@ -850,7 +1108,7 @@ class PlotDataRequest(BaseModel):
     variable: str
 
 @app.post("/get-plot-data")
-async def get_plot_data(request: PlotDataRequest):
+async def get_plot_data(request: PlotDataRequest, current_user=Depends(get_current_user)):
     job_name = request.job_name
     data_file_name = request.data_file_name
     variable = request.variable
@@ -862,10 +1120,12 @@ async def get_plot_data(request: PlotDataRequest):
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
 
     # Search for 'output/biogem' folder specifically
     plot_data_path = None
@@ -929,21 +1189,9 @@ from fastapi.responses import StreamingResponse, FileResponse
 import tempfile
 import shutil
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 def trim_variable(variable: str) -> str:
     """Trim and normalize the variable by removing leading/trailing spaces."""
     return variable.strip()
-
-def safe_join(base: str, *paths: str) -> str:
-    """Join paths safely to prevent directory traversal."""
-    final = os.path.abspath(os.path.join(base, *paths))
-    base_abs = os.path.abspath(base)
-    if not final.startswith(base_abs + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid job name")
-    return final
 
 async def read_data_file(file_path: str, variable: str) -> Generator[str, None, None]:
     """Generator function to yield existing and new data as it is written to the file."""
@@ -998,7 +1246,7 @@ async def read_data_file(file_path: str, variable: str) -> Generator[str, None, 
         raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
 
 @app.get("/jobs/{job_name}/download")
-async def download_job_zip(job_name: str, background_tasks: BackgroundTasks):
+async def download_job_zip(job_name: str, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
     """
     Package the entire job directory into a zip and stream it back.
     """
@@ -1010,6 +1258,8 @@ async def download_job_zip(job_name: str, background_tasks: BackgroundTasks):
     job_path = safe_join(ctoaster_jobs, job_name)
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
 
     # Create a temporary directory to hold the archive
     tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
@@ -1032,12 +1282,15 @@ async def download_job_zip(job_name: str, background_tasks: BackgroundTasks):
 async def get_plot_data_stream(
     job_name: str = Query(...),
     data_file_name: str = Query(...),
-    variable: str = Query(...)
+    variable: str = Query(...),
+    current_user=Depends(get_current_user),
 ):
     """GET API to stream data for plotting in real-time."""
-    job_path = os.path.join(ctoaster_jobs, job_name)
+    job_path = get_job_path(job_name)
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
 
     plot_data_path = None
     for root, dirs, files in os.walk(job_path):
