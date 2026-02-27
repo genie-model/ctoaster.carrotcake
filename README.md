@@ -228,6 +228,20 @@ kubectl apply -f deployment.yaml
 kubectl apply -f service.yaml
 ```
 
+> **Persistent volume for jobs (per-user subdirs)**  
+> Ensure a ReadWriteMany PVC is created and mounted at `/ctoaster.carrotcake-jobs` on all backend pods so any pod can serve any user’s jobs. Example PVC:
+> ```bash
+> kubectl apply -f pvc-jobs.yaml
+> ```
+> The backend will store jobs under `/ctoaster.carrotcake-jobs/<user_id>/<job_name>`.
+
+> **Secrets / env**  
+> Create a secret containing `jwt-secret`:
+> ```bash
+> kubectl create secret generic ctoaster-secrets --from-literal=jwt-secret='set-a-strong-secret'
+> ```
+> The deployment references this secret via `CTOASTER_JWT_SECRET`.
+
 4. **Check status:**
 ```bash
 kubectl get pods
@@ -318,6 +332,7 @@ Apply the updated deployment (if you added `resources:`) and then the HPA manife
 
 ```bash
 kubectl apply -f deployment.yaml
+kubectl apply -f pvc-jobs.yaml
 kubectl apply -f hpa-backend.yaml
 ```
 

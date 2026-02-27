@@ -21,6 +21,11 @@ spec:
           env:
             - name: ENVIRONMENT
               value: "production"
+            - name: CTOASTER_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ctoaster-secrets
+                  key: jwt-secret
           resources:
             requests:
               cpu: "250m"
@@ -28,3 +33,10 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          volumeMounts:
+            - name: jobs-pvc
+              mountPath: /ctoaster.carrotcake-jobs
+      volumes:
+        - name: jobs-pvc
+          persistentVolumeClaim:
+            claimName: ctoaster-jobs-pvc
