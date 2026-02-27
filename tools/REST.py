@@ -215,10 +215,20 @@ def safe_join(base: str, *paths: str) -> str:
     return final
 
 
-def get_job_path(job_name: str) -> str:
+def validate_job_name(job_name: str) -> str:
     if not job_name:
         raise HTTPException(status_code=400, detail="Job name is required")
-    return safe_join(ctoaster_jobs, job_name)
+    if len(job_name) > 128:
+        raise HTTPException(status_code=400, detail="Job name too long")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    if any(ch not in allowed for ch in job_name):
+        raise HTTPException(status_code=400, detail="Invalid characters in job name")
+    return job_name
+
+
+def get_user_job_path(user: dict, job_name: str) -> str:
+    validate_job_name(job_name)
+    return safe_join(ctoaster_jobs, str(user["id"]), job_name)
 
 
 def ensure_job_owner(job_path: str, user: dict):
@@ -283,15 +293,13 @@ def list_jobs(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_list = os.listdir(ctoaster_jobs)
+        user_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        os.makedirs(user_root, exist_ok=True)
+        job_list = os.listdir(user_root)
         jobs = []
         for job in job_list:
-            job_path = get_job_path(job)
+            job_path = safe_join(user_root, job)
             if os.path.isdir(job_path) and job.strip() != "MODELS":
-                try:
-                    ensure_job_owner(job_path, current_user)
-                except HTTPException:
-                    continue
                 jobs.append({"name": job, "path": job_path})
         return {"jobs": jobs}
     except Exception as e:
@@ -304,13 +312,12 @@ def get_job_details(job_name: str, current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_job_path(job_name)
+        job_path = get_user_job_path(current_user, job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
 
-        ensure_job_owner(job_path, current_user)
         selected_job_name_by_user[current_user["id"]] = job_name
 
         # Determine job status
@@ -360,13 +367,11 @@ def delete_job(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_job_path(selected_job_name)
+        job_path = get_user_job_path(current_user, selected_job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
-
-        ensure_job_owner(job_path, current_user)
 
         # Delete the job directory
         shutil.rmtree(job_path)
@@ -412,13 +417,12 @@ async def add_job(request: Request, current_user=Depends(get_current_user)):
     data = await request.json()
     job_name = data.get("job_name")
 
-    if not job_name:
-        raise HTTPException(status_code=400, detail="Job name is required")
+    validate_job_name(job_name)
 
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = get_job_path(job_name)
+    job_dir = get_user_job_path(current_user, job_name)
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
@@ -456,12 +460,10 @@ def get_run_segments(job_name: str, current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_job_path(job_name)
+        job_path = get_user_job_path(current_user, job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
-
-        ensure_job_owner(job_path, current_user)
 
         segments_dir = os.path.join(job_path, "config", "segments")
 
@@ -544,14 +546,11 @@ async def get_completed_jobs(current_user=Depends(get_current_user)):
             raise ValueError("ctoaster_jobs is not defined")
 
         completed_jobs = []
-        # Iterate over all jobs in the jobs directory
-        for job_name in os.listdir(ctoaster_jobs):
-            job_path = get_job_path(job_name)
+        user_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        os.makedirs(user_root, exist_ok=True)
+        for job_name in os.listdir(user_root):
+            job_path = safe_join(user_root, job_name)
             if os.path.isdir(job_path):
-                try:
-                    ensure_job_owner(job_path, current_user)
-                except HTTPException:
-                    continue
                 status_file = os.path.join(job_path, "status")
                 if os.path.exists(status_file):
                     status_parts = read_status_file(job_path)
@@ -570,13 +569,11 @@ def get_setup(job_name: str, current_user=Depends(get_current_user)):
         if ctoaster_jobs is None or ctoaster_data is None:
             raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
 
-        job_path = get_job_path(job_name)
+        job_path = get_user_job_path(current_user, job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
-
-        ensure_job_owner(job_path, current_user)
 
         # Read the setup details from the config file
         config_path = os.path.join(job_path, "config", "config")
@@ -622,13 +619,11 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
         if ctoaster_jobs is None or ctoaster_data is None:
             raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
 
-        job_path = get_job_path(job_name)
+        job_path = get_user_job_path(current_user, job_name)
 
         if not os.path.isdir(job_path):
             logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
-
-        ensure_job_owner(job_path, current_user)
 
         # Update the main config file
         config_path = os.path.join(job_path, "config", "config")
@@ -671,7 +666,9 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
         elif os.path.exists(mods_path):
             os.remove(mods_path)
 
-        # Regenerate the namelists
+        # Regenerate the namelists (use per-user jobs root)
+        user_jobs_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        os.makedirs(user_jobs_root, exist_ok=True)
         new_job_script = os.path.join(ctoaster_root, "tools", "new-job.py")
         cmd = [
             sys.executable,
@@ -682,7 +679,7 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
             "-u",
             user_config,
             "-j",
-            ctoaster_jobs,
+            user_jobs_root,
             job_name,
             str(run_length),
         ]
@@ -744,12 +741,10 @@ async def run_job(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_job_path(selected_job_name)
+        job_path = get_user_job_path(current_user, selected_job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
-
-        ensure_job_owner(job_path, current_user)
 
         # Check if the job is in a runnable state
         status = "UNCONFIGURED"
@@ -837,12 +832,10 @@ async def pause_job(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_job_path(selected_job_name)
+        job_path = get_user_job_path(current_user, selected_job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
-
-        ensure_job_owner(job_path, current_user)
 
         # Check if the job is currently running or paused
         status_file_path = os.path.join(job_path, "status")
@@ -874,8 +867,7 @@ async def get_log(job_name: str, current_user=Depends(get_current_user)):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = get_job_path(job_name)
-    ensure_job_owner(job_path, current_user)
+    job_path = get_user_job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     if not os.path.exists(log_file_path):
@@ -902,8 +894,7 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks, curren
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = get_job_path(job_name)
-    ensure_job_owner(job_path, current_user)
+    job_path = get_user_job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     # Wait for the log file to be created (retry mechanism)
@@ -944,7 +935,7 @@ def get_namelists(job_id: str, current_user=Depends(get_current_user)):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = get_job_path(job_id)
+    job_dir = get_user_job_path(current_user, job_id)
 
     if not os.path.isdir(job_dir):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -967,7 +958,7 @@ def get_namelist_content(job_id: str, namelist_name: str, current_user=Depends(g
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_dir = get_job_path(job_id)
+    job_dir = get_user_job_path(current_user, job_id)
 
     if not os.path.isdir(job_dir):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1003,12 +994,10 @@ async def get_data_files_list(job_name: str, current_user=Depends(get_current_us
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = get_job_path(job_name)
+    job_path = get_user_job_path(current_user, job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(job_path, current_user)
 
     # Search for 'output/biogem' folder specifically
     plot_data_path = None
@@ -1057,7 +1046,7 @@ async def get_variables(job_name: str, data_file_name: str, current_user=Depends
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    job_path = get_job_path(job_name)
+    job_path = get_user_job_path(current_user, job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1120,7 +1109,7 @@ async def get_plot_data(request: PlotDataRequest, current_user=Depends(get_curre
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    job_path = get_job_path(job_name)
+    job_path = get_user_job_path(current_user, job_name)
 
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1255,11 +1244,9 @@ async def download_job_zip(job_name: str, background_tasks: BackgroundTasks, cur
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = safe_join(ctoaster_jobs, job_name)
+    job_path = get_user_job_path(current_user, job_name)
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(job_path, current_user)
 
     # Create a temporary directory to hold the archive
     tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
@@ -1286,11 +1273,9 @@ async def get_plot_data_stream(
     current_user=Depends(get_current_user),
 ):
     """GET API to stream data for plotting in real-time."""
-    job_path = get_job_path(job_name)
+    job_path = get_user_job_path(current_user, job_name)
     if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(job_path, current_user)
 
     plot_data_path = None
     for root, dirs, files in os.walk(job_path):
