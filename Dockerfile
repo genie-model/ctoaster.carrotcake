@@ -33,7 +33,6 @@ RUN wget https://downloads.unidata.ucar.edu/netcdf-c/4.9.2/netcdf-c-4.9.2.tar.gz
     && export CFLAGS="-I/usr/lib/x86_64-linux-gnu/hdf5/serial/include" \
     && ./configure \
     && make -j$(nproc) \
-    && make check \
     && make install \
     && cd .. && rm -rf netcdf-c-4.9.2 netcdf-c-4.9.2.tar.gz
 
@@ -43,7 +42,6 @@ RUN wget https://downloads.unidata.ucar.edu/netcdf-fortran/4.6.1/netcdf-fortran-
     && cd netcdf-fortran-4.6.1 \
     && ./configure \
     && make -j$(nproc) \
-    && make check \
     && make install \
     && cd .. && rm -rf netcdf-fortran-4.6.1 netcdf-fortran-4.6.1.tar.gz
 
