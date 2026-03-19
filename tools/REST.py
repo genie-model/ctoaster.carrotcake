@@ -35,19 +35,21 @@ JWT_SECRET = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 USER_DB_FILENAME = "users.db"
 
-USER_DB_PATH = os.path.join(ctoaster_root, USER_DB_FILENAME) if ctoaster_root else os.path.join(os.getcwd(), USER_DB_FILENAME)
+USER_DB_PATH = os.path.join(ctoaster_jobs, USER_DB_FILENAME) if ctoaster_jobs else os.path.join(os.getcwd(), USER_DB_FILENAME)
 
 app = FastAPI()
 
 # CORS configuration
 origins = [
-    "http://localhost:3000",  # React development server (local dev)
+    "https://ctoaster.org",
+    "http://ctoaster.org",
+    "http://localhost:3000",
     "http://localhost:5000",
     "http://localhost:5001",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5000",
     "http://127.0.0.1:8000",
-]
+    ]
 
 app.add_middleware(
     CORSMiddleware,
@@ -255,6 +257,14 @@ selected_job_name_by_user: Dict[int, Optional[str]] = {}
 
 init_user_db()
 
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+@app.get("/")
+def root():
+    return {"ok": True}
 
 @app.post("/auth/register")
 async def register(request: Request):
