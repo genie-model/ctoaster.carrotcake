@@ -1,6 +1,3 @@
-mport shutil 
-import uuid
-from datetime import datetime
 import asyncio
 import base64
 import datetime
@@ -21,30 +18,26 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
 from starlette.responses import StreamingResponse
-    
+
 from tools.utils import read_ctoaster_config
 
 # Initialize the configuration
 read_ctoaster_config()
-    
+
 # Ensure global variables are initialized
 if not read_ctoaster_config():
     raise RuntimeError("Failed to read ctoaster configuration")
-    
+
 from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
-    
+
 # Auth constants (define before use)
 JWT_SECRET = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 USER_DB_FILENAME = "users.db"
 
-USER_DB_PATH = (
-            os.path.join(ctoaster_jobs, USER_DB_FILENAME)
-                if ctoaster_jobs
-                    else os.path.join(ctoaster_root, USER_DB_FILENAME)
-                    )
-app = FastAPI()
+USER_DB_PATH = os.path.join(ctoaster_jobs, USER_DB_FILENAME) if ctoaster_jobs else os.path.join(os.getcwd(), USER_DB_FILENAME)
 
+app = FastAPI()
 
 # CORS configuration
 origins = [
@@ -112,6 +105,7 @@ def verify_password(password: str, salt_b64: str, hash_b64: str) -> bool:
     _, computed_hash = hash_password(password, salt_b64)
     return hmac.compare_digest(computed_hash, hash_b64)
 
+
 def generate_token(user_id: int, email: str) -> str:
     payload = {
         "uid": user_id,
@@ -157,6 +151,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         }
     finally:
         conn.close()
+
 
 def get_user_by_id(user_id: int) -> Optional[dict]:
     conn = sqlite3.connect(USER_DB_PATH)
@@ -251,259 +246,11 @@ def ensure_job_owner(job_path: str, user: dict):
         raise HTTPException(status_code=403, detail="Job is not owned by this user")
 
 
-def get_current_user(request: Request) -> dict:
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    token = auth_header.split(" ", 1)[1].strip()
-    payload = decode_token(token)
-    user = get_user_by_id(payload["uid"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
-def safe_join(base: str, *paths: str) -> str:
-    final = os.path.abspath(os.path.join(base, *paths))
-    base_abs = os.path.abspath(base)
-    if not final.startswith(base_abs + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    return final
-
-
-def validate_job_name(job_name: str) -> str:
-    if not job_name:
-        raise HTTPException(status_code=400, detail="Job name is required")
-    if len(job_name) > 128:
-        raise HTTPException(status_code=400, detail="Job name too long")
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-    if any(ch not in allowed for ch in job_name):
-        raise HTTPException(status_code=400, detail="Invalid characters in job name")
-    return job_name
-
-
-def get_user_job_path(user: dict, job_name: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(ctoaster_jobs, str(user["id"]), job_name)
-
-
-def ensure_job_owner(job_path: str, user: dict):
-    owner_file = os.path.join(job_path, "owner.json")
-    if not os.path.exists(owner_file):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
-    try:
-        with open(owner_file) as f:
-            owner = json.load(f)
-    except Exception:
-        raise HTTPException(status_code=403, detail="Job ownership unreadable")
-    if str(owner.get("user_id")) != str(user["id"]):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
-
-
 def write_job_owner(job_path: str, user: dict):
     owner_file = os.path.join(job_path, "owner.json")
     with open(owner_file, "w") as f:
         json.dump({"user_id": user["id"], "email": user["email"]}, f)
 
-#gke helpers
-def get_shared_user_root(user: dict) -> str:
-    return safe_join(ctoaster_jobs, str(user["id"]))
-
-def get_shared_job_path(user: dict, job_name: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(get_shared_user_root(user), job_name)
-
-# Keep old callers working for now
-def get_user_job_path(user: dict, job_name: str) -> str:
-    return get_shared_job_path(user, job_name)
-
-def get_workspace_root() -> str:
-    return os.environ.get("CTOASTER_WORK_ROOT", "/tmp/ctoaster-workspaces")
-
-def new_run_id() -> str:
-    return datetime.utcnow().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-
-def get_workspace_job_path(user: dict, job_name: str, run_id: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(get_workspace_root(), str(user["id"]), job_name, run_id)
-
-def stage_shared_job_to_workspace(user: dict, job_name: str, run_id: str) -> tuple[str, str]:
-    shared_job_path = get_shared_job_path(user, job_name)
-    workspace_job_path = get_workspace_job_path(user, job_name, run_id)
-
-    if not os.path.isdir(shared_job_path):
-        raise FileNotFoundError(f"Shared job path not found: {shared_job_path}")
-
-    os.makedirs(os.path.dirname(workspace_job_path), exist_ok=True)
-    shutil.copytree(shared_job_path, workspace_job_path, dirs_exist_ok=True)
-    return shared_job_path, workspace_job_path
-
-def sync_workspace_back_to_shared(shared_job_path: str, workspace_job_path: str) -> None:
-    if not os.path.isdir(workspace_job_path):
-        return
-
-    os.makedirs(shared_job_path, exist_ok=True)
-
-    skip_names = {"carrotcake-ship.exe"}
-    mirror_delete_names = {"command", "carrotcake-ship.exe"}
-
-    workspace_names = set(os.listdir(workspace_job_path)) - skip_names
-    shared_names = set(os.listdir(shared_job_path))
-
-    # Remove stale transient files from shared if they no longer exist in workspace
-    for stale_name in (shared_names - workspace_names):
-        if stale_name not in mirror_delete_names:
-            continue
-        stale_path = os.path.join(shared_job_path, stale_name)
-        try:
-            if os.path.isdir(stale_path):
-                shutil.rmtree(stale_path)
-            else:
-                os.remove(stale_path)
-        except FileNotFoundError:
-            pass
-
-    for name in workspace_names:
-        src = os.path.join(workspace_job_path, name)
-        dst = os.path.join(shared_job_path, name)
-
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
-
-def find_plot_data_path(job_path: str) -> str:
-    for root, dirs, files in os.walk(job_path):
-        if "output/biogem" in root:
-            return root
-    raise HTTPException(status_code=404, detail="Output/biogem path not found")
-
-from threading import RLock
-
-ACTIVE_RUNS: Dict[tuple[int, str], dict] = {}
-ACTIVE_RUNS_LOCK = RLock()
-
-SYNC_INTERVAL_SECONDS = float(os.environ.get("CTOASTER_SYNC_INTERVAL_SECONDS", "2.0"))
-RUN_RETENTION_SECONDS = float(os.environ.get("CTOASTER_RUN_RETENTION_SECONDS", "30.0"))
-
-
-def get_job_key(user: dict, job_name: str) -> tuple[int, str]:
-    return (int(user["id"]), validate_job_name(job_name))
-
-
-def get_active_run(user: dict, job_name: str) -> Optional[dict]:
-    key = get_job_key(user, job_name)
-    with ACTIVE_RUNS_LOCK:
-        entry = ACTIVE_RUNS.get(key)
-        if not entry:
-            return None
-        return entry
-
-
-def register_active_run(
-    user: dict,
-    job_name: str,
-    run_id: str,
-    shared_job_path: str,
-    workspace_job_path: str,
-    process: sp.Popen,
-) -> dict:
-    key = get_job_key(user, job_name)
-    entry = {
-        "user_id": int(user["id"]),
-        "job_name": job_name,
-        "run_id": run_id,
-        "shared_job_path": shared_job_path,
-        "workspace_job_path": workspace_job_path,
-        "process": process,
-        "started_at": time.time(),
-        "last_sync_at": None,
-        "returncode": None,
-        "sync_task": None,
-        "watch_task": None,
-    }
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS[key] = entry
-    return entry
-
-
-def clear_active_run(user: dict, job_name: str) -> None:
-    key = get_job_key(user, job_name)
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS.pop(key, None)
-
-
-def get_effective_job_path(
-    user: dict,
-    job_name: str,
-    prefer_workspace: bool = True,
-) -> str:
-    shared_job_path = get_shared_job_path(user, job_name)
-
-    if not prefer_workspace:
-        return shared_job_path
-
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return shared_job_path
-
-    process = entry["process"]
-    workspace_job_path = entry["workspace_job_path"]
-
-    if process.poll() is None and os.path.isdir(workspace_job_path):
-        return workspace_job_path
-
-    return shared_job_path
-
-async def periodic_sync_active_run(user: dict, job_name: str) -> None:
-    while True:
-        entry = get_active_run(user, job_name)
-        if not entry:
-            return
-
-        process = entry["process"]
-        if process.poll() is not None:
-            return
-
-        try:
-            sync_workspace_back_to_shared(
-                entry["shared_job_path"],
-                entry["workspace_job_path"],
-            )
-            entry["last_sync_at"] = time.time()
-        except Exception:
-            logger.exception("Periodic sync failed for %s/%s", user["id"], job_name)
-
-        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
-
-
-async def watch_active_run(user: dict, job_name: str) -> None:
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return
-
-    process = entry["process"]
-    returncode = await asyncio.to_thread(process.wait)
-
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return
-
-    entry["returncode"] = returncode
-
-    try:
-        sync_workspace_back_to_shared(
-            entry["shared_job_path"],
-            entry["workspace_job_path"],
-        )
-        entry["last_sync_at"] = time.time()
-    except Exception:
-        logger.exception("Final sync failed for %s/%s", user["id"], job_name)
-
-    await asyncio.sleep(RUN_RETENTION_SECONDS)
-
-    # optional later: shutil.rmtree(entry["workspace_job_path"], ignore_errors=True)
-    clear_active_run(user, job_name)
 
 # Track selected job per user to preserve existing UI contract
 selected_job_name_by_user: Dict[int, Optional[str]] = {}
@@ -514,7 +261,7 @@ init_user_db()
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-    
+
 @app.get("/")
 def root():
     return {"ok": True}
@@ -575,11 +322,10 @@ def get_job_details(job_name: str, current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        shared_job_path = get_shared_job_path(current_user, job_name)
-        job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+        job_path = get_user_job_path(current_user, job_name)
 
-        if not os.path.isdir(shared_job_path):
-            logger.info(f"Job not found: {shared_job_path}")
+        if not os.path.isdir(job_path):
+            logger.info(f"Job not found: {job_path}")
             return {"error": "Job not found"}
 
         selected_job_name_by_user[current_user["id"]] = job_name
@@ -607,7 +353,7 @@ def get_job_details(job_name: str, current_user=Depends(get_current_user)):
 
         job_details = {
             "name": job_name,
-            "path": shared_job_path,
+            "path": job_path,
             "status": status,
             "run_length": run_length,
             "t100": "true" if t100 else "false",
@@ -813,9 +559,8 @@ async def get_completed_jobs(current_user=Depends(get_current_user)):
         user_root = safe_join(ctoaster_jobs, str(current_user["id"]))
         os.makedirs(user_root, exist_ok=True)
         for job_name in os.listdir(user_root):
-            shared_job_path = safe_join(user_root, job_name)
-            if os.path.isdir(shared_job_path):
-                job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+            job_path = safe_join(user_root, job_name)
+            if os.path.isdir(job_path):
                 status_file = os.path.join(job_path, "status")
                 if os.path.exists(status_file):
                     status_parts = read_status_file(job_path)
@@ -1006,19 +751,20 @@ async def run_job(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        shared_job_path = get_shared_job_path(current_user, selected_job_name)
+        job_path = get_user_job_path(current_user, selected_job_name)
 
-        if not os.path.isdir(shared_job_path):
+        if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
 
-        # Check if the shared job is in a runnable state
+        # Check if the job is in a runnable state
         status = "UNCONFIGURED"
-        if os.path.exists(os.path.join(shared_job_path, "data_genie")):
+        if os.path.exists(os.path.join(job_path, "data_genie")):
             status = "RUNNABLE"
-            if os.path.exists(os.path.join(shared_job_path, "status")):
-                status_parts = read_status_file(shared_job_path)
+            if os.path.exists(os.path.join(job_path, "status")):
+                # Use the read_status_file function to read the status
+                status_parts = read_status_file(job_path)
                 if status_parts:
-                    status = status_parts[0]
+                    status = status_parts[0]  # The first element is the status
                 else:
                     status = "ERROR"
 
@@ -1028,40 +774,38 @@ async def run_job(current_user=Depends(get_current_user)):
                 detail=f"Job '{selected_job_name}' is not configured or runnable.",
             )
 
+        # Correct path to check for the executable
         exe = os.path.join(
             ctoaster_jobs,
             "MODELS",
-            ctoaster_version,
-            sys.platform.upper(),
+            ctoaster_version,  # Replace with actual version variable or string
+            sys.platform.upper(),  # Dynamically get platform information
             "ship",
             "carrotcake.exe",
         )
 
+        # Check if executable exists
         if not os.path.exists(exe):
             raise HTTPException(
                 status_code=500, detail=f"Executable not found at {exe}"
             )
 
-        run_id = new_run_id()
-        shared_job_path, workspace_job_path = stage_shared_job_to_workspace(
-            current_user, selected_job_name, run_id
-        )
-
-        # Copy executable into workspace, not shared storage
-        runexe = os.path.join(workspace_job_path, "carrotcake-ship.exe")
+        # Copy the executable to the job directory
+        runexe = os.path.join(job_path, "carrotcake-ship.exe")
         if os.path.exists(runexe):
             os.remove(runexe)
         shutil.copy(exe, runexe)
 
         # Handle resuming a paused job
-        command_file_path = os.path.join(workspace_job_path, "command")
+        command_file_path = os.path.join(job_path, "command")
         if os.path.exists(command_file_path):
             os.remove(command_file_path)
 
         if status == "PAUSED":
-            status_parts = read_status_file(shared_job_path)
+            status_parts = read_status_file(job_path)
             if status_parts and len(status_parts) >= 4:
                 _, koverall, _, genie_clock = status_parts[:4]
+                # Write the GUI_RESTART command to the command file
                 with open(command_file_path, "w") as command_file:
                     command_file.write(f"GUI_RESTART {koverall} {genie_clock}\n")
             else:
@@ -1070,48 +814,14 @@ async def run_job(current_user=Depends(get_current_user)):
                     detail="Status file does not contain the required parameters to resume the job.",
                 )
 
-        # Run inside workspace
-        log_file_path = os.path.join(workspace_job_path, "run.log")
+        # Start executable and direct stdout and stderr to run.log in job directory
+        log_file_path = os.path.join(job_path, "run.log")
         with open(log_file_path, "a") as log_file:
             process = sp.Popen(
-                [runexe],
-                cwd=workspace_job_path,
-                stdout=log_file,
-                stderr=sp.STDOUT,
-            )
-        existing = get_active_run(current_user, selected_job_name)
-        if existing and existing["process"].poll() is None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Job '{selected_job_name}' is already running",
+                [runexe], cwd=job_path, stdout=log_file, stderr=sp.STDOUT
             )
 
-        entry = register_active_run(
-            current_user,
-            selected_job_name,
-            run_id,
-            shared_job_path,
-            workspace_job_path,
-            process,
-        )
-
-        # Initial sync-back so logs/status/command/exe appear in shared storage immediately
-        sync_workspace_back_to_shared(shared_job_path, workspace_job_path)
-        entry["last_sync_at"] = time.time()
-
-        entry["sync_task"] = asyncio.create_task(
-            periodic_sync_active_run(current_user, selected_job_name)
-        )
-        entry["watch_task"] = asyncio.create_task(
-            watch_active_run(current_user, selected_job_name)
-        )
-
-        return {
-            "message": f"Job '{selected_job_name}' is now running",
-            "run_id": run_id,
-            "workspace": workspace_job_path,
-        }
-
+        return {"message": f"Job '{selected_job_name}' is now running"}
     except FileNotFoundError as fnfe:
         error_message = f"File not found error: {str(fnfe)}"
         logger.error(error_message)
@@ -1120,6 +830,7 @@ async def run_job(current_user=Depends(get_current_user)):
         error_message = f"Unexpected error running job '{selected_job_name}': {str(e)}"
         logger.error(error_message)
         raise HTTPException(status_code=500, detail=error_message)
+
 
 @app.post("/pause-job")
 async def pause_job(current_user=Depends(get_current_user)):
@@ -1131,8 +842,7 @@ async def pause_job(current_user=Depends(get_current_user)):
         if ctoaster_jobs is None:
             raise ValueError("ctoaster_jobs is not defined")
 
-        job_path = get_effective_job_path(current_user, selected_job_name, prefer_workspace=True)
-        shared_job_path = get_shared_job_path(current_user, selected_job_name)
+        job_path = get_user_job_path(current_user, selected_job_name)
 
         if not os.path.isdir(job_path):
             raise HTTPException(status_code=404, detail="Job not found")
@@ -1151,8 +861,6 @@ async def pause_job(current_user=Depends(get_current_user)):
         command_file_path = os.path.join(job_path, "command")
         with open(command_file_path, "w") as command_file:
             command_file.write("PAUSE\n")
-        if job_path != shared_job_path:
-            sync_workspace_back_to_shared(shared_job_path, job_path)
 
         return {"message": f"Job '{selected_job_name}' has been paused"}
     except Exception as e:
@@ -1169,7 +877,7 @@ async def get_log(job_name: str, current_user=Depends(get_current_user)):
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = get_user_job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     if not os.path.exists(log_file_path):
@@ -1196,7 +904,7 @@ async def stream_output(job_name: str, background_tasks: BackgroundTasks, curren
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = get_user_job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     # Wait for the log file to be created (retry mechanism)
@@ -1296,14 +1004,22 @@ async def get_data_files_list(job_name: str, current_user=Depends(get_current_us
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = get_user_job_path(current_user, job_name)
 
-    if not os.path.isdir(shared_job_path):
+    if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
 
     print(":: Resolved plot_data_path ::", plot_data_path)
 
@@ -1340,14 +1056,24 @@ async def get_variables(job_name: str, data_file_name: str, current_user=Depends
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = get_user_job_path(current_user, job_name)
 
-    if not os.path.isdir(shared_job_path):
+    if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
+    ensure_job_owner(job_path, current_user)
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
 
     # Construct the full path to the data file
     data_file_path = os.path.join(plot_data_path, data_file_name)
@@ -1393,14 +1119,24 @@ async def get_plot_data(request: PlotDataRequest, current_user=Depends(get_curre
         raise ValueError("ctoaster_jobs is not defined")
 
     # Construct the job path
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = get_user_job_path(current_user, job_name)
 
-    if not os.path.isdir(shared_job_path):
+    if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
+    ensure_job_owner(job_path, current_user)
+
+    # Search for 'output/biogem' folder specifically
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(
+            status_code=404, detail="Output/biogem path not found"
+        )
 
     # Construct the full path to the data file
     data_file_path = os.path.join(plot_data_path, data_file_name)
@@ -1518,20 +1254,14 @@ async def download_job_zip(job_name: str, background_tasks: BackgroundTasks, cur
     if ctoaster_jobs is None:
         raise ValueError("ctoaster_jobs is not defined")
 
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    if not os.path.isdir(shared_job_path):
+    job_path = get_user_job_path(current_user, job_name)
+    if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-
-    effective_job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-    if effective_job_path != shared_job_path:
-        sync_workspace_back_to_shared(shared_job_path, effective_job_path)
 
     # Create a temporary directory to hold the archive
     tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
     zip_base = os.path.join(tmpdir, job_name)
-    archive_path = shutil.make_archive(zip_base, "zip", shared_job_path)
+    archive_path = shutil.make_archive(zip_base, "zip", job_path)
 
     # Cleanup temp dir after response is sent
     def _cleanup():
@@ -1553,14 +1283,18 @@ async def get_plot_data_stream(
     current_user=Depends(get_current_user),
 ):
     """GET API to stream data for plotting in real-time."""
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-
-    if not os.path.isdir(shared_job_path):
+    job_path = get_user_job_path(current_user, job_name)
+    if not os.path.isdir(job_path):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
+    plot_data_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root:
+            plot_data_path = root
+            break
+
+    if not plot_data_path:
+        raise HTTPException(status_code=404, detail="Output/biogem path not found")
 
     data_file_path = os.path.join(plot_data_path, data_file_name)
     if not os.path.isfile(data_file_path):
@@ -1568,3 +1302,4 @@ async def get_plot_data_stream(
 
     # Return streaming response for real-time data
     return StreamingResponse(read_data_file(data_file_path, variable), media_type="text/event-stream")
+
