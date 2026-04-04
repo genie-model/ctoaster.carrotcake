@@ -5,7 +5,7 @@
 # the Ingress path /api → ctoaster-api-service, avoiding the need for a
 # separate CORS configuration or hard-coded external IP.
 #
-# Replace <IMAGE_TAG> before applying, or inject via envsubst / CI pipeline.
+# Replace v2.0.0 before applying, or inject via envsubst / CI pipeline.
 # ---------------------------------------------------------------------------
 
 apiVersion: apps/v1
@@ -26,7 +26,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/cupcake-frontend:<IMAGE_TAG>
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/cupcake-frontend:v2.0.0
           imagePullPolicy: Always
           ports:
             - containerPort: 3000

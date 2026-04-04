@@ -44,7 +44,7 @@ spec:
 
       containers:
         - name: runner
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0
           imagePullPolicy: Always
 
           # Entrypoint — tools/__init__.py makes tools a proper package

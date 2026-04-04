@@ -7,10 +7,10 @@
 #          --from-literal=db-url='postgresql://ctoaster_user:<PASSWORD>@127.0.0.1:5432/ctoaster' \
 #          --from-literal=jwt-secret='<RANDOM_32_BYTE_HEX>'
 #
-#   2. Replace <PROJECT_ID> and <IMAGE_TAG> with real values, or use
+#   2. Replace <PROJECT_ID> and v2.0.0 with real values, or use
 #      envsubst / a CD pipeline to inject them at deploy time.
 #
-#   3. If using Cloud SQL Auth Proxy, replace <PROJECT_ID>:<REGION>:<INSTANCE>
+#   3. If using Cloud SQL Auth Proxy, replace 
 #      in the cloudsql-proxy sidecar args below.
 # ---------------------------------------------------------------------------
 
@@ -49,7 +49,7 @@ spec:
         # Main API container
         # -----------------------------------------------------------------------
         - name: api
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -70,7 +70,7 @@ spec:
             # Image used by k8s_jobs.py when creating runner Job pods.
             # Keep in sync with the image tag above.
             - name: RUNNER_IMAGE
-              value: "us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>"
+              value: "us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0"
             - name: K8S_NAMESPACE
               value: "ctoaster"
           volumeMounts:
@@ -110,7 +110,7 @@ spec:
             - "--structured-logs"
             - "--port=5432"
             - "--credentials-file=/secrets/cloudsql/key.json"
-            - "<PROJECT_ID>:<REGION>:<INSTANCE>"   # replace: e.g. ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
+            - ""   # replace: e.g. ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
           securityContext:
             runAsNonRoot: true
           volumeMounts:
