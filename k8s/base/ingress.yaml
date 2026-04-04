@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# Nginx Ingress — single entry point for the cluster
+#
+# Prerequisites (run once in Cloud Shell):
+#   1. Install the Nginx Ingress Controller on your GKE cluster:
+#        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+#        helm repo update
+#        helm install ingress-nginx ingress-nginx/ingress-nginx \
+#          --namespace ingress-nginx --create-namespace \
+#          --set controller.service.type=LoadBalancer
+#
+#   2. Wait for the LoadBalancer external IP:
+#        kubectl -n ingress-nginx get svc ingress-nginx-controller
+#
+#   3. (Optional) Point your DNS A record at that IP so you can use a real host.
+#      Update the `host:` field below accordingly.
+#
+# Routing rules:
+#   /api/*  → ctoaster-api-service (strips the /api prefix before forwarding)
+#   /*      → ctoaster-frontend-service
+# ---------------------------------------------------------------------------
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ctoaster-ingress
+  namespace: ctoaster
+  annotations:
+    # Use the Nginx Ingress Controller installed above
+    kubernetes.io/ingress.class: "nginx"
+    # Strip the /api prefix so FastAPI endpoints see /jobs, /auth/*, etc.
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # Enable CORS at the Ingress level so both services share the same origin
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+spec:
+  rules:
+    - host: ""   # Leave empty to match any hostname / IP. Set to your domain if available.
+      http:
+        paths:
+          # API: /api/... → strips /api prefix and forwards to backend
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: ctoaster-api-service
+                port:
+                  number: 80
+          # Frontend: everything else
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ctoaster-frontend-service
+                port:
+                  number: 80

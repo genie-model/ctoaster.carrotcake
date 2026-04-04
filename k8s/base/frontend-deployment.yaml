@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# Frontend (React) Deployment
+#
+# REACT_APP_API_URL is set to /api so the browser sends all API calls through
+# the Ingress path /api → ctoaster-api-service, avoiding the need for a
+# separate CORS configuration or hard-coded external IP.
+#
+# Replace <IMAGE_TAG> before applying, or inject via envsubst / CI pipeline.
+# ---------------------------------------------------------------------------
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ctoaster-frontend
+  namespace: ctoaster
+  labels:
+    app: ctoaster-frontend
+spec:
+  selector:
+    matchLabels:
+      app: ctoaster-frontend
+  template:
+    metadata:
+      labels:
+        app: ctoaster-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/cupcake-frontend:<IMAGE_TAG>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          env:
+            # Relative path — works because the Ingress routes /api to the API
+            # service and everything else to this frontend service.
+            - name: REACT_APP_API_URL
+              value: "/api"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5

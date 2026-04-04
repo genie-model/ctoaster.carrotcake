@@ -1,0 +1,126 @@
+# ---------------------------------------------------------------------------
+# Stateless API Deployment
+#
+# Before applying:
+#   1. Create the DB credentials secret:
+#        kubectl -n ctoaster create secret generic ctoaster-secrets \
+#          --from-literal=db-url='postgresql://ctoaster_user:<PASSWORD>@127.0.0.1:5432/ctoaster' \
+#          --from-literal=jwt-secret='<RANDOM_32_BYTE_HEX>'
+#
+#   2. Replace <PROJECT_ID> and <IMAGE_TAG> with real values, or use
+#      envsubst / a CD pipeline to inject them at deploy time.
+#
+#   3. If using Cloud SQL Auth Proxy, replace <PROJECT_ID>:<REGION>:<INSTANCE>
+#      in the cloudsql-proxy sidecar args below.
+# ---------------------------------------------------------------------------
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ctoaster-api
+  namespace: ctoaster
+  labels:
+    app: ctoaster-api
+spec:
+  # Replica count is intentionally low here; the HPA in api-hpa.yaml will
+  # scale it up under load.  Do NOT set replicas + HPA on the same field or
+  # ArgoCD / Flux will fight the autoscaler; omit replicas and let the HPA own it.
+  selector:
+    matchLabels:
+      app: ctoaster-api
+  template:
+    metadata:
+      labels:
+        app: ctoaster-api
+    spec:
+      serviceAccountName: ctoaster-api
+
+      # -----------------------------------------------------------------------
+      # Init container: wait for Cloud SQL proxy to be ready before starting
+      # the API.  Remove if not using Cloud SQL.
+      # -----------------------------------------------------------------------
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z 127.0.0.1 5432; do echo "waiting for DB proxy..."; sleep 2; done']
+
+      containers:
+        # -----------------------------------------------------------------------
+        # Main API container
+        # -----------------------------------------------------------------------
+        - name: api
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          command: ["uvicorn", "tools.REST:app", "--host", "0.0.0.0", "--port", "8000"]
+          env:
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ctoaster-secrets
+                  key: db-url
+            - name: CTOASTER_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ctoaster-secrets
+                  key: jwt-secret
+            - name: FILESTORE_ROOT
+              value: "/ctoaster-filestore"
+            # Image used by k8s_jobs.py when creating runner Job pods.
+            # Keep in sync with the image tag above.
+            - name: RUNNER_IMAGE
+              value: "us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>"
+            - name: K8S_NAMESPACE
+              value: "ctoaster"
+          volumeMounts:
+            - name: filestore-volume
+              mountPath: /ctoaster-filestore
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+        # -----------------------------------------------------------------------
+        # Cloud SQL Auth Proxy sidecar
+        # Connects to Cloud SQL so the API (and init container above) can reach
+        # Postgres at 127.0.0.1:5432 without a public IP.
+        #
+        # Workload Identity is the preferred auth method — no key file needed
+        # when the GSA/KSA binding is set up.  See api-rbac.yaml annotation.
+        # -----------------------------------------------------------------------
+        - name: cloudsql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.11.4
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "<PROJECT_ID>:<REGION>:<INSTANCE>"   # replace: e.g. ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+
+      volumes:
+        - name: filestore-volume
+          persistentVolumeClaim:
+            claimName: ctoaster-filestore-pvc

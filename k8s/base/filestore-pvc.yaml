@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Filestore Persistent Volume + Claim (ReadWriteMany)
+#
+# Prerequisites (run once in Cloud Shell before applying this file):
+#   1. Enable the Filestore CSI driver on your GKE cluster:
+#        gcloud container clusters update <CLUSTER_NAME> \
+#          --update-addons=GcpFilestoreCsiDriver=ENABLED \
+#          --region=<REGION>
+#
+#   2. Create the Filestore instance (if it doesn't already exist):
+#        gcloud filestore instances create ctoaster-filestore \
+#          --zone=<ZONE> \
+#          --tier=BASIC_HDD \
+#          --file-share=name="ctoaster_data",capacity=1TB \
+#          --network=name="default"
+#
+#   3. After creation, note the IP address printed by:
+#        gcloud filestore instances describe ctoaster-filestore --zone=<ZONE>
+#      and replace <FILESTORE_IP> below.
+#
+# Dynamic provisioning via the Filestore CSI driver is an alternative but
+# requires an enterprise-tier instance; static binding is simpler for a single
+# shared volume.
+# ---------------------------------------------------------------------------
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ctoaster-filestore-pv
+  namespace: ctoaster
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: filestore-rwx
+  csi:
+    driver: filestore.csi.storage.gke.io
+    volumeHandle: "modeInstance/us-west2-a/ctoaster-filestore/ctoaster_data"
+    volumeAttributes:
+      ip: "<FILESTORE_IP>"         # replace with the Filestore NFS IP address
+      volume: "ctoaster_data"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ctoaster-filestore-pvc
+  namespace: ctoaster
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: filestore-rwx
+  resources:
+    requests:
+      storage: 1Ti
+  volumeName: ctoaster-filestore-pv  # bind to the static PV above

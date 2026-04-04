@@ -1,6 +1,19 @@
-import shutil 
-import uuid
-from datetime import datetime
+"""
+tools/REST.py
+-------------
+Stateless FastAPI backend for ctoaster (v2 architecture).
+
+Responsibilities:
+  - Authenticate users (JWT)
+  - CRUD for jobs (metadata in DB + folders on Filestore)
+  - Submit run requests  → create DB run row + Kubernetes Job
+  - Pause / cancel runs  → update DB desired_state + write command file
+  - Serve logs / status / plot data  → read from Filestore directly
+  - Never own live process handles or in-memory run state
+"""
+
+from __future__ import annotations
+
 import asyncio
 import base64
 import datetime
@@ -9,44 +22,60 @@ import hmac
 import json
 import logging
 import os
-import secrets
 import shutil
-import sqlite3
 import subprocess as sp
 import sys
+import tempfile
 import time
-from typing import Dict, Optional, Tuple
+import uuid
+from typing import Dict, Generator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.background import BackgroundTasks
-from starlette.responses import StreamingResponse
-    
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
+
 from tools.utils import read_ctoaster_config
 
-# Initialize the configuration
+# ── ctoaster configuration ────────────────────────────────────────────────────
 read_ctoaster_config()
-    
-# Ensure global variables are initialized
 if not read_ctoaster_config():
     raise RuntimeError("Failed to read ctoaster configuration")
-    
-from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
-    
-# Auth constants (define before use)
-JWT_SECRET = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
-TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
-USER_DB_FILENAME = "users.db"
 
-USER_DB_PATH = (
-            os.path.join(ctoaster_jobs, USER_DB_FILENAME)
-                if ctoaster_jobs
-                    else os.path.join(ctoaster_root, USER_DB_FILENAME)
-                    )
+from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_version
+
+# ── DB / storage / k8s imports ───────────────────────────────────────────────
+from tools.db import (
+    create_run,
+    create_user,
+    delete_job_record,
+    get_active_run_for_job,
+    get_job_record,
+    get_run_by_id,
+    get_user_by_email,
+    get_user_by_id,
+    hash_password,
+    init_db,
+    list_user_jobs,
+    update_run,
+    upsert_job_record,
+    verify_password,
+)
+from tools.k8s_jobs import create_runner_job
+from tools.storage import (
+    find_plot_data_path,
+    get_job_path,
+    get_user_root,
+    read_owner,
+    safe_join,
+    sync_to_shared,
+    validate_job_name,
+    write_owner,
+)
+
+# ── app setup ─────────────────────────────────────────────────────────────────
 app = FastAPI()
 
-
-# CORS configuration
 origins = [
     "https://ctoaster.org",
     "http://ctoaster.org",
@@ -56,42 +85,30 @@ origins = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5000",
     "http://127.0.0.1:8000",
-    ]
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=False,  # Changed to False - not needed for this API
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Auth / user storage ===
-def init_user_db():
-    dir_path = os.path.dirname(USER_DB_PATH)
-    if dir_path:
-        os.makedirs(dir_path, exist_ok=True)
-    conn = sqlite3.connect(USER_DB_PATH)
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+# ── JWT constants ─────────────────────────────────────────────────────────────
+JWT_SECRET: str = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
+TOKEN_TTL_SECONDS: int = 60 * 60 * 24 * 7  # 7 days
 
+# ── initialise DB on startup ──────────────────────────────────────────────────
+init_db()
+
+
+# =============================================================================
+# JWT helpers
+# =============================================================================
 
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
@@ -101,16 +118,6 @@ def _b64url_decode(data: str) -> bytes:
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + padding)
 
-
-def hash_password(password: str, salt_b64: Optional[str] = None) -> Tuple[str, str]:
-    salt = _b64url_decode(salt_b64) if salt_b64 else secrets.token_bytes(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
-    return _b64url_encode(salt), _b64url_encode(dk)
-
-
-def verify_password(password: str, salt_b64: str, hash_b64: str) -> bool:
-    _, computed_hash = hash_password(password, salt_b64)
-    return hmac.compare_digest(computed_hash, hash_b64)
 
 def generate_token(user_id: int, email: str) -> str:
     payload = {
@@ -129,7 +136,9 @@ def decode_token(token: str) -> dict:
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid token format")
     payload_bytes = _b64url_decode(payload_b64)
-    expected_sig = hmac.new(JWT_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
+    expected_sig = hmac.new(
+        JWT_SECRET.encode("utf-8"), payload_bytes, hashlib.sha256
+    ).digest()
     if not hmac.compare_digest(expected_sig, _b64url_decode(sig_b64)):
         raise HTTPException(status_code=401, detail="Invalid token signature")
     payload = json.loads(payload_bytes.decode("utf-8"))
@@ -138,70 +147,6 @@ def decode_token(token: str) -> dict:
     return payload
 
 
-def get_user_by_email(email: str) -> Optional[dict]:
-    conn = sqlite3.connect(USER_DB_PATH)
-    try:
-        cur = conn.execute(
-            "SELECT id, email, password_hash, salt, created_at FROM users WHERE email = ?",
-            (email,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "email": row[1],
-            "password_hash": row[2],
-            "salt": row[3],
-            "created_at": row[4],
-        }
-    finally:
-        conn.close()
-
-def get_user_by_id(user_id: int) -> Optional[dict]:
-    conn = sqlite3.connect(USER_DB_PATH)
-    try:
-        cur = conn.execute(
-            "SELECT id, email, password_hash, salt, created_at FROM users WHERE id = ?",
-            (user_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "email": row[1],
-            "password_hash": row[2],
-            "salt": row[3],
-            "created_at": row[4],
-        }
-    finally:
-        conn.close()
-
-
-def create_user(email: str, password: str) -> dict:
-    existing = get_user_by_email(email)
-    if existing:
-        raise HTTPException(status_code=400, detail="User already exists")
-    salt_b64, hash_b64 = hash_password(password)
-    conn = sqlite3.connect(USER_DB_PATH)
-    try:
-        cur = conn.execute(
-            "INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
-            (
-                email,
-                hash_b64,
-                salt_b64,
-                datetime.datetime.utcnow().isoformat() + "Z",
-            ),
-        )
-        conn.commit()
-        user_id = cur.lastrowid
-    finally:
-        conn.close()
-    return {"id": user_id, "email": email}
-
-
 def get_current_user(request: Request) -> dict:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -214,310 +159,77 @@ def get_current_user(request: Request) -> dict:
     return user
 
 
-def safe_join(base: str, *paths: str) -> str:
-    final = os.path.abspath(os.path.join(base, *paths))
-    base_abs = os.path.abspath(base)
-    if not final.startswith(base_abs + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    return final
+# =============================================================================
+# Job path / ownership helpers
+# =============================================================================
 
-
-def validate_job_name(job_name: str) -> str:
-    if not job_name:
-        raise HTTPException(status_code=400, detail="Job name is required")
-    if len(job_name) > 128:
-        raise HTTPException(status_code=400, detail="Job name too long")
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-    if any(ch not in allowed for ch in job_name):
-        raise HTTPException(status_code=400, detail="Invalid characters in job name")
-    return job_name
-
-
-def get_user_job_path(user: dict, job_name: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(ctoaster_jobs, str(user["id"]), job_name)
-
-
-def ensure_job_owner(job_path: str, user: dict):
-    owner_file = os.path.join(job_path, "owner.json")
-    if not os.path.exists(owner_file):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
+def _job_path(user: dict, job_name: str) -> str:
+    """Resolve the canonical Filestore path for a job; converts ValueError → HTTPException."""
     try:
-        with open(owner_file) as f:
-            owner = json.load(f)
-    except Exception:
-        raise HTTPException(status_code=403, detail="Job ownership unreadable")
+        return get_job_path(int(user["id"]), job_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _ensure_job_exists(job_path: str, job_name: str) -> None:
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+
+
+def _ensure_owner(job_path: str, user: dict) -> None:
+    """
+    Verify the job belongs to the requesting user via owner.json.
+    In the per-user-subdir layout the path itself already enforces ownership,
+    but we keep this check as a defence-in-depth guard.
+    """
+    owner = read_owner(job_path)
+    if owner is None:
+        raise HTTPException(status_code=403, detail="Job ownership file missing")
     if str(owner.get("user_id")) != str(user["id"]):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
+        raise HTTPException(status_code=403, detail="Job not owned by this user")
 
 
-def get_current_user(request: Request) -> dict:
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    token = auth_header.split(" ", 1)[1].strip()
-    payload = decode_token(token)
-    user = get_user_by_id(payload["uid"])
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
+# =============================================================================
+# Status file helper
+# =============================================================================
 
-
-def safe_join(base: str, *paths: str) -> str:
-    final = os.path.abspath(os.path.join(base, *paths))
-    base_abs = os.path.abspath(base)
-    if not final.startswith(base_abs + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    return final
-
-
-def validate_job_name(job_name: str) -> str:
-    if not job_name:
-        raise HTTPException(status_code=400, detail="Job name is required")
-    if len(job_name) > 128:
-        raise HTTPException(status_code=400, detail="Job name too long")
-    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-    if any(ch not in allowed for ch in job_name):
-        raise HTTPException(status_code=400, detail="Invalid characters in job name")
-    return job_name
-
-
-def get_user_job_path(user: dict, job_name: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(ctoaster_jobs, str(user["id"]), job_name)
-
-
-def ensure_job_owner(job_path: str, user: dict):
-    owner_file = os.path.join(job_path, "owner.json")
-    if not os.path.exists(owner_file):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
-    try:
-        with open(owner_file) as f:
-            owner = json.load(f)
-    except Exception:
-        raise HTTPException(status_code=403, detail="Job ownership unreadable")
-    if str(owner.get("user_id")) != str(user["id"]):
-        raise HTTPException(status_code=403, detail="Job is not owned by this user")
-
-
-def write_job_owner(job_path: str, user: dict):
-    owner_file = os.path.join(job_path, "owner.json")
-    with open(owner_file, "w") as f:
-        json.dump({"user_id": user["id"], "email": user["email"]}, f)
-
-#gke helpers
-def get_shared_user_root(user: dict) -> str:
-    return safe_join(ctoaster_jobs, str(user["id"]))
-
-def get_shared_job_path(user: dict, job_name: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(get_shared_user_root(user), job_name)
-
-# Keep old callers working for now
-def get_user_job_path(user: dict, job_name: str) -> str:
-    return get_shared_job_path(user, job_name)
-
-def get_workspace_root() -> str:
-    return os.environ.get("CTOASTER_WORK_ROOT", "/tmp/ctoaster-workspaces")
-
-def new_run_id() -> str:
-    return datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-
-def get_workspace_job_path(user: dict, job_name: str, run_id: str) -> str:
-    validate_job_name(job_name)
-    return safe_join(get_workspace_root(), str(user["id"]), job_name, run_id)
-
-def stage_shared_job_to_workspace(user: dict, job_name: str, run_id: str) -> tuple[str, str]:
-    shared_job_path = get_shared_job_path(user, job_name)
-    workspace_job_path = get_workspace_job_path(user, job_name, run_id)
-
-    if not os.path.isdir(shared_job_path):
-        raise FileNotFoundError(f"Shared job path not found: {shared_job_path}")
-
-    os.makedirs(os.path.dirname(workspace_job_path), exist_ok=True)
-    shutil.copytree(shared_job_path, workspace_job_path, dirs_exist_ok=True)
-    return shared_job_path, workspace_job_path
-
-def sync_workspace_back_to_shared(shared_job_path: str, workspace_job_path: str) -> None:
-    if not os.path.isdir(workspace_job_path):
-        return
-
-    os.makedirs(shared_job_path, exist_ok=True)
-
-    skip_names = {"carrotcake-ship.exe"}
-    mirror_delete_names = {"command", "carrotcake-ship.exe"}
-
-    workspace_names = set(os.listdir(workspace_job_path)) - skip_names
-    shared_names = set(os.listdir(shared_job_path))
-
-    # Remove stale transient files from shared if they no longer exist in workspace
-    for stale_name in (shared_names - workspace_names):
-        if stale_name not in mirror_delete_names:
-            continue
-        stale_path = os.path.join(shared_job_path, stale_name)
+def read_status_file(job_dir: str) -> Optional[list]:
+    """
+    Read the first line of the 'status' file and return it split as a list.
+    Retries up to 1000 times to handle transient NFS locks.
+    Returns None if the file cannot be read after all retries.
+    """
+    status = None
+    for attempt in range(1000):
         try:
-            if os.path.isdir(stale_path):
-                shutil.rmtree(stale_path)
-            else:
-                os.remove(stale_path)
-        except FileNotFoundError:
+            if attempt:
+                time.sleep(0.001)
+            with open(os.path.join(job_dir, "status")) as fp:
+                status = fp.readline().strip().split()
+            if status:
+                break
+        except IOError:
             pass
-
-    for name in workspace_names:
-        src = os.path.join(workspace_job_path, name)
-        dst = os.path.join(shared_job_path, name)
-
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
-
-def find_plot_data_path(job_path: str) -> str:
-    for root, dirs, files in os.walk(job_path):
-        if "output/biogem" in root:
-            return root
-    raise HTTPException(status_code=404, detail="Output/biogem path not found")
-
-from threading import RLock
-
-ACTIVE_RUNS: Dict[tuple[int, str], dict] = {}
-ACTIVE_RUNS_LOCK = RLock()
-
-SYNC_INTERVAL_SECONDS = float(os.environ.get("CTOASTER_SYNC_INTERVAL_SECONDS", "2.0"))
-RUN_RETENTION_SECONDS = float(os.environ.get("CTOASTER_RUN_RETENTION_SECONDS", "30.0"))
+    return status or None
 
 
-def get_job_key(user: dict, job_name: str) -> tuple[int, str]:
-    return (int(user["id"]), validate_job_name(job_name))
-
-
-def get_active_run(user: dict, job_name: str) -> Optional[dict]:
-    key = get_job_key(user, job_name)
-    with ACTIVE_RUNS_LOCK:
-        entry = ACTIVE_RUNS.get(key)
-        if not entry:
-            return None
-        return entry
-
-
-def register_active_run(
-    user: dict,
-    job_name: str,
-    run_id: str,
-    shared_job_path: str,
-    workspace_job_path: str,
-    process: sp.Popen,
-) -> dict:
-    key = get_job_key(user, job_name)
-    entry = {
-        "user_id": int(user["id"]),
-        "job_name": job_name,
-        "run_id": run_id,
-        "shared_job_path": shared_job_path,
-        "workspace_job_path": workspace_job_path,
-        "process": process,
-        "started_at": time.time(),
-        "last_sync_at": None,
-        "returncode": None,
-        "sync_task": None,
-        "watch_task": None,
-    }
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS[key] = entry
-    return entry
-
-
-def clear_active_run(user: dict, job_name: str) -> None:
-    key = get_job_key(user, job_name)
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS.pop(key, None)
-
-
-def get_effective_job_path(
-    user: dict,
-    job_name: str,
-    prefer_workspace: bool = True,
-) -> str:
-    shared_job_path = get_shared_job_path(user, job_name)
-
-    if not prefer_workspace:
-        return shared_job_path
-
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return shared_job_path
-
-    process = entry["process"]
-    workspace_job_path = entry["workspace_job_path"]
-
-    if process.poll() is None and os.path.isdir(workspace_job_path):
-        return workspace_job_path
-
-    return shared_job_path
-
-async def periodic_sync_active_run(user: dict, job_name: str) -> None:
-    while True:
-        entry = get_active_run(user, job_name)
-        if not entry:
-            return
-
-        process = entry["process"]
-        if process.poll() is not None:
-            return
-
-        try:
-            sync_workspace_back_to_shared(
-                entry["shared_job_path"],
-                entry["workspace_job_path"],
-            )
-            entry["last_sync_at"] = time.time()
-        except Exception:
-            logger.exception("Periodic sync failed for %s/%s", user["id"], job_name)
-
-        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
-
-
-async def watch_active_run(user: dict, job_name: str) -> None:
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return
-
-    process = entry["process"]
-    returncode = await asyncio.to_thread(process.wait)
-
-    entry = get_active_run(user, job_name)
-    if not entry:
-        return
-
-    entry["returncode"] = returncode
-
-    try:
-        sync_workspace_back_to_shared(
-            entry["shared_job_path"],
-            entry["workspace_job_path"],
-        )
-        entry["last_sync_at"] = time.time()
-    except Exception:
-        logger.exception("Final sync failed for %s/%s", user["id"], job_name)
-
-    await asyncio.sleep(RUN_RETENTION_SECONDS)
-
-    # optional later: shutil.rmtree(entry["workspace_job_path"], ignore_errors=True)
-    clear_active_run(user, job_name)
-
-# Track selected job per user to preserve existing UI contract
-selected_job_name_by_user: Dict[int, Optional[str]] = {}
-
-init_user_db()
-
+# =============================================================================
+# Health / root
+# =============================================================================
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-    
+
+
 @app.get("/")
 def root():
     return {"ok": True}
+
+
+# =============================================================================
+# Auth endpoints
+# =============================================================================
 
 @app.post("/auth/register")
 async def register(request: Request):
@@ -526,7 +238,10 @@ async def register(request: Request):
     password = data.get("password", "")
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
-    user = create_user(email, password)
+    try:
+        user = create_user(email, password)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="User already exists")
     token = generate_token(user["id"], user["email"])
     return {"user": user, "token": token}
 
@@ -550,50 +265,41 @@ def me(current_user=Depends(get_current_user)):
     return {"user": {"id": current_user["id"], "email": current_user["email"]}}
 
 
+# =============================================================================
+# Job list / details
+# =============================================================================
+
 @app.get("/jobs")
 def list_jobs(current_user=Depends(get_current_user)):
     try:
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
-
-        user_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        user_id = int(current_user["id"])
+        user_root = get_user_root(user_id)
         os.makedirs(user_root, exist_ok=True)
-        job_list = os.listdir(user_root)
+
         jobs = []
-        for job in job_list:
-            job_path = safe_join(user_root, job)
-            if os.path.isdir(job_path) and job.strip() != "MODELS":
-                jobs.append({"name": job, "path": job_path})
+        for name in os.listdir(user_root):
+            job_dir = os.path.join(user_root, name)
+            if os.path.isdir(job_dir):
+                jobs.append({"name": name, "path": job_dir})
         return {"jobs": jobs}
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @app.get("/job/{job_name}")
 def get_job_details(job_name: str, current_user=Depends(get_current_user)):
     try:
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
+        job_path = _job_path(current_user, job_name)
+        _ensure_job_exists(job_path, job_name)
 
-        shared_job_path = get_shared_job_path(current_user, job_name)
-        job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-
-        if not os.path.isdir(shared_job_path):
-            logger.info(f"Job not found: {shared_job_path}")
-            return {"error": "Job not found"}
-
-        selected_job_name_by_user[current_user["id"]] = job_name
-
-        # Determine job status
+        # Determine job status from the file on Filestore
         status = "UNCONFIGURED"
         if os.path.exists(os.path.join(job_path, "data_genie")):
             status = "RUNNABLE"
             if os.path.exists(os.path.join(job_path, "status")):
-                with open(os.path.join(job_path, "status")) as f:
-                    status_line = f.readline().strip()
-                    status = status_line.split()[0] if status_line else "ERROR"
+                parts = read_status_file(job_path)
+                status = parts[0] if parts else "ERROR"
 
-        # Determine run length and T100 from the config file
         run_length = "n/a"
         t100 = False
         config_path = os.path.join(job_path, "config", "config")
@@ -601,329 +307,265 @@ def get_job_details(job_name: str, current_user=Depends(get_current_user)):
             with open(config_path) as f:
                 for line in f:
                     if line.startswith("run_length:"):
-                        run_length = line.split(":")[1].strip()
+                        run_length = line.split(":", 1)[1].strip()
                     if line.startswith("t100:"):
-                        t100 = line.split(":")[1].strip().lower() == "true"
+                        t100 = line.split(":", 1)[1].strip().lower() == "true"
 
         job_details = {
             "name": job_name,
-            "path": shared_job_path,
+            "path": job_path,
             "status": status,
             "run_length": run_length,
             "t100": "true" if t100 else "false",
         }
-
         logger.info(f"Job details retrieved: {job_details}")
-
         return {"job": job_details}
-    except Exception as e:
-        logger.error(f"Error retrieving job details: {str(e)}")
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error retrieving job details: {exc}")
+        return {"error": str(exc)}
 
 
-@app.delete("/delete-job")
-def delete_job(current_user=Depends(get_current_user)):
-    try:
-        selected_job_name = selected_job_name_by_user.get(current_user["id"])
-        if not selected_job_name:
-            raise HTTPException(status_code=400, detail="No job selected")
-
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
-
-        job_path = get_user_job_path(current_user, selected_job_name)
-
-        if not os.path.isdir(job_path):
-            logger.info(f"Job not found: {job_path}")
-            return {"error": "Job not found"}
-
-        # Delete the job directory
-        shutil.rmtree(job_path)
-
-        local_job_name = selected_job_name
-
-        # Clear the selected job name
-        selected_job_name_by_user[current_user["id"]] = None
-
-        logger.info(f"Job deleted: {job_path}")
-        return {"message": f"Job '{local_job_name}' deleted successfully"}
-
-    except Exception as e:
-        logger.error(f"Error deleting job: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error deleting job: {str(e)}")
-    # if not selected_job_name:
-    #     raise HTTPException(status_code=400, detail="No job selected")
-
-    # from utils import ctoaster_jobs
-
-    # if ctoaster_jobs is None:
-    #     raise ValueError("ctoaster_jobs is not defined")
-
-    # job_path = os.path.join(ctoaster_jobs, selected_job_name)
-
-    # if not os.path.isdir(job_path):
-    #     logger.info(f"Job not found: {job_path}")
-    #     return {"error": "Job not found"}
-
-    # try:
-    #     os.rmdir(job_path)
-    # except Exception as e:
-    #     logger.error(f"Error deleting job: {str(e)}")
-    #     return {"error": f"Error deleting job: {str(e)}"}
-
-    # return {"message": f"Job '{selected_job_name}' deleted successfully"}
-
-
-import shutil
+# =============================================================================
+# Job management (add / delete)
+# =============================================================================
 
 @app.post("/add-job")
 async def add_job(request: Request, current_user=Depends(get_current_user)):
     data = await request.json()
-    job_name = data.get("job_name")
+    job_name = data.get("job_name", "")
 
-    validate_job_name(job_name)
+    try:
+        validate_job_name(job_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    job_dir = get_user_job_path(current_user, job_name)
+    job_dir = _job_path(current_user, job_name)
     if os.path.exists(job_dir):
         raise HTTPException(status_code=400, detail="Job already exists")
 
-    # Create the job directory
     try:
         os.makedirs(os.path.join(job_dir, "config"))
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Could not create job directory: {str(e)}"
-        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not create job directory: {exc}")
 
-    # Create the main config file
     config_path = os.path.join(job_dir, "config", "config")
     try:
-        with open(config_path, "w") as config_file:
-            config_file.write(
-                "base_config: ?\nuser_config: ?\nrun_length: ?\nt100: ?\n"
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Could not write configuration file: {str(e)}"
-        )
+        with open(config_path, "w") as f:
+            f.write("base_config: ?\nuser_config: ?\nrun_length: ?\nt100: ?\n")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not write config file: {exc}")
 
-    # Tag ownership
-    write_job_owner(job_dir, current_user)
+    write_owner(job_dir, int(current_user["id"]), current_user["email"])
 
-    selected_job_name_by_user[current_user["id"]] = job_name
+    # Register in DB (best-effort — Filestore is authoritative for job existence)
+    try:
+        upsert_job_record(int(current_user["id"]), job_name, job_dir)
+    except Exception as exc:
+        logger.warning(f"DB upsert failed for new job '{job_name}': {exc}")
 
     return {"status": "success", "message": f"Job '{job_name}' created successfully"}
 
 
+@app.delete("/delete-job")
+def delete_job(job_name: str = Query(...), current_user=Depends(get_current_user)):
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
+
+    # Refuse to delete a running job
+    job_record = get_job_record(int(current_user["id"]), job_name)
+    if job_record:
+        active = get_active_run_for_job(job_record["id"])
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job '{job_name}' has an active run. Pause or cancel it first.",
+            )
+
+    try:
+        shutil.rmtree(job_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error deleting job: {exc}")
+
+    try:
+        delete_job_record(int(current_user["id"]), job_name)
+    except Exception as exc:
+        logger.warning(f"DB delete failed for job '{job_name}': {exc}")
+
+    logger.info(f"Job deleted: {job_path}")
+    return {"message": f"Job '{job_name}' deleted successfully"}
+
+
+# =============================================================================
+# Run segments (informational)
+# =============================================================================
+
 @app.get("/run-segments/{job_name}")
 def get_run_segments(job_name: str, current_user=Depends(get_current_user)):
     try:
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
-
-        job_path = get_user_job_path(current_user, job_name)
-
-        if not os.path.isdir(job_path):
-            raise HTTPException(status_code=404, detail="Job not found")
+        job_path = _job_path(current_user, job_name)
+        _ensure_job_exists(job_path, job_name)
 
         segments_dir = os.path.join(job_path, "config", "segments")
 
-        # Function to read the segments from the config directory
-        def read_segments():
-            segments = []
-            if os.path.exists(segments_dir):
-                for segment_id in os.listdir(segments_dir):
-                    segment_path = os.path.join(segments_dir, segment_id)
-                    if os.path.isdir(segment_path):
-                        config_path = os.path.join(segment_path, "config")
-                        if os.path.exists(config_path):
-                            with open(config_path) as f:
-                                for line in f:
-                                    if line.startswith("run_length:"):
-                                        run_length = int(line.split(":")[1].strip())
-                                        segments.append((segment_id, run_length))
-            return segments
-
-        segments = read_segments()
+        segments = []
+        if os.path.exists(segments_dir):
+            for segment_id in os.listdir(segments_dir):
+                segment_path = os.path.join(segments_dir, segment_id)
+                if os.path.isdir(segment_path):
+                    cfg = os.path.join(segment_path, "config")
+                    if os.path.exists(cfg):
+                        with open(cfg) as f:
+                            for line in f:
+                                if line.startswith("run_length:"):
+                                    segments.append((segment_id, int(line.split(":")[1].strip())))
 
         if not segments:
-            # Default case with a single segment.
             return {"run_segments": ["1: 1-END"]}
 
-        # Generate strings for each segment in the form "<id>: <start>-<end>"
         res = [f"{i + 1}: {start}-{end}" for i, (start, end) in enumerate(segments)]
-
-        # Add a final segment representing the next step after the last known segment.
-        final_step = segments[-1][1] + 1  # Assumes segments are sorted and non-empty
+        final_step = segments[-1][1] + 1
         res.append(f"{len(segments) + 1}: {final_step}-END")
-
-        # Reverse the list to match the original behavior and convert to a tuple.
         return {"run_segments": tuple(reversed(res))}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching run segments: {str(e)}"
-        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching run segments: {exc}")
 
+
+# =============================================================================
+# Config dropdowns (no auth required — read-only static data)
+# =============================================================================
 
 @app.get("/base-configs")
 def get_base_configs():
     try:
         base_configs_dir = os.path.join(ctoaster_data, "base-configs")
-        base_configs = [
+        base_configs = sorted(
             f.rpartition(".")[0]
             for f in os.listdir(base_configs_dir)
             if f.endswith(".config")
-        ]
-        base_configs.sort()
-        return {"base_configs": base_configs}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching base configs: {str(e)}"
         )
+        return {"base_configs": base_configs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching base configs: {exc}")
 
 
 @app.get("/user-configs")
 def get_user_configs():
     try:
         user_configs_dir = os.path.join(ctoaster_data, "user-configs")
-        user_configs = []
-        for root, _, files in os.walk(user_configs_dir):
-            for file in files:
-                user_configs.append(
-                    os.path.relpath(os.path.join(root, file), user_configs_dir)
-                )
-        user_configs.sort()
-        return {"user_configs": user_configs}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching user configs: {str(e)}"
+        user_configs = sorted(
+            os.path.relpath(os.path.join(root, f), user_configs_dir)
+            for root, _, files in os.walk(user_configs_dir)
+            for f in files
         )
+        return {"user_configs": user_configs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching user configs: {exc}")
 
+
+# =============================================================================
+# Completed jobs (used by Status panel)
+# =============================================================================
 
 @app.get("/completed-jobs")
 async def get_completed_jobs(current_user=Depends(get_current_user)):
     try:
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
-
-        completed_jobs = []
-        user_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        user_root = get_user_root(int(current_user["id"]))
         os.makedirs(user_root, exist_ok=True)
+
+        completed = []
         for job_name in os.listdir(user_root):
-            shared_job_path = safe_join(user_root, job_name)
-            if os.path.isdir(shared_job_path):
-                job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-                status_file = os.path.join(job_path, "status")
-                if os.path.exists(status_file):
-                    status_parts = read_status_file(job_path)
-                    if status_parts and status_parts[0] == "COMPLETE":
-                        completed_jobs.append(job_name)
+            job_dir = os.path.join(user_root, job_name)
+            if not os.path.isdir(job_dir):
+                continue
+            status_file = os.path.join(job_dir, "status")
+            if os.path.exists(status_file):
+                parts = read_status_file(job_dir)
+                if parts and parts[0] == "COMPLETE":
+                    completed.append(job_name)
+        return {"completed_jobs": completed}
+    except Exception as exc:
+        logger.error(f"Error fetching completed jobs: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
-        return {"completed_jobs": completed_jobs}
-    except Exception as e:
-        logger.error(f"Error fetching completed jobs: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
+# =============================================================================
+# Setup (read + save)
+# =============================================================================
 
 @app.get("/setup/{job_name}")
 def get_setup(job_name: str, current_user=Depends(get_current_user)):
     try:
-        if ctoaster_jobs is None or ctoaster_data is None:
-            raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
+        job_path = _job_path(current_user, job_name)
+        _ensure_job_exists(job_path, job_name)
 
-        job_path = get_user_job_path(current_user, job_name)
-
-        if not os.path.isdir(job_path):
-            logger.info(f"Job not found: {job_path}")
-            return {"error": "Job not found"}
-
-        # Read the setup details from the config file
         config_path = os.path.join(job_path, "config", "config")
         if not os.path.exists(config_path):
             raise ValueError("Config file not found")
 
-        setup_details = {
+        setup = {
             "base_config": "",
             "user_config": "",
             "modifications": "",
             "run_length": "n/a",
             "restart_from": "",
         }
-
-        # Read from the main config file
         with open(config_path) as f:
             for line in f:
                 if line.startswith("base_config:"):
-                    setup_details["base_config"] = line.split(":", 1)[1].strip()
+                    setup["base_config"] = line.split(":", 1)[1].strip()
                 elif line.startswith("user_config:"):
-                    setup_details["user_config"] = line.split(":", 1)[1].strip()
+                    setup["user_config"] = line.split(":", 1)[1].strip()
                 elif line.startswith("run_length:"):
-                    setup_details["run_length"] = line.split(":", 1)[1].strip()
+                    setup["run_length"] = line.split(":", 1)[1].strip()
                 elif line.startswith("restart:"):
-                    setup_details["restart_from"] = line.split(":", 1)[1].strip()
+                    setup["restart_from"] = line.split(":", 1)[1].strip()
 
-        # Read modifications
         mods_path = os.path.join(job_path, "config", "config_mods")
         if os.path.exists(mods_path):
             with open(mods_path) as f:
-                setup_details["modifications"] = f.read().strip()
+                setup["modifications"] = f.read().strip()
 
-        return {"setup": setup_details}
-    except Exception as e:
-        logger.error(f"Error retrieving setup details: {str(e)}")
-        return {"error": str(e)}
+        return {"setup": setup}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error retrieving setup: {exc}")
+        return {"error": str(exc)}
 
 
 @app.post("/setup/{job_name}")
 async def update_setup(job_name: str, request: Request, current_user=Depends(get_current_user)):
     try:
         data = await request.json()
-        if ctoaster_jobs is None or ctoaster_data is None:
-            raise ValueError("ctoaster_jobs or ctoaster_data is not defined")
+        job_path = _job_path(current_user, job_name)
+        _ensure_job_exists(job_path, job_name)
 
-        job_path = get_user_job_path(current_user, job_name)
-
-        if not os.path.isdir(job_path):
-            logger.info(f"Job not found: {job_path}")
-            return {"error": "Job not found"}
-
-        # Update the main config file
         config_path = os.path.join(job_path, "config", "config")
         if not os.path.exists(config_path):
             raise ValueError("Config file not found")
 
-        # Prepare the updated configuration data
         base_config = data.get("base_config", "")
         user_config = data.get("user_config", "")
         modifications = data.get("modifications", "")
         run_length = data.get("run_length", "n/a")
-        restart = data.get("restart_from", "")
-        if restart == "":
-            restart = None  # Handle empty string as None
+        restart = data.get("restart_from") or None
 
         with open(config_path, "w") as f:
             if base_config:
-                f.write(
-                    f"base_config_dir: {os.path.join(ctoaster_data, 'base-configs')}\n"
-                )
+                f.write(f"base_config_dir: {os.path.join(ctoaster_data, 'base-configs')}\n")
                 f.write(f"base_config: {base_config}\n")
             if user_config:
-                f.write(
-                    f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n"
-                )
+                f.write(f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n")
                 f.write(f"user_config: {user_config}\n")
-            if restart is not None:
-                f.write(f"restart: {restart}\n")
-            else:
-                f.write("restart: \n")
-            today = datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"config_date: {today}\n")
+            f.write(f"restart: {restart or ''}\n")
+            f.write(f"config_date: {datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"run_length: {run_length}\n")
 
-        # Update the modifications file
         mods_path = os.path.join(job_path, "config", "config_mods")
         if modifications:
             with open(mods_path, "w") as f:
@@ -931,20 +573,17 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
         elif os.path.exists(mods_path):
             os.remove(mods_path)
 
-        # Regenerate the namelists (use per-user jobs root)
-        user_jobs_root = safe_join(ctoaster_jobs, str(current_user["id"]))
+        # Regenerate namelists using the per-user jobs root on Filestore
+        user_jobs_root = get_user_root(int(current_user["id"]))
         os.makedirs(user_jobs_root, exist_ok=True)
+
         new_job_script = os.path.join(ctoaster_root, "tools", "new-job.py")
         cmd = [
-            sys.executable,
-            new_job_script,
+            sys.executable, new_job_script,
             "--gui",
-            "-b",
-            base_config,
-            "-u",
-            user_config,
-            "-j",
-            user_jobs_root,
+            "-b", base_config,
+            "-u", user_config,
+            "-j", user_jobs_root,
             job_name,
             str(run_length),
         ]
@@ -955,595 +594,373 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
 
         try:
             res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
-        except sp.CalledProcessError as e:
-            res = f"ERR:Failed to run new-job script with error {e.output}"
-            raise ValueError(res)
-        except Exception as e:
-            res = f"ERR:Unexpected error {e}"
-            raise ValueError(res)
+        except sp.CalledProcessError as exc:
+            raise ValueError(f"new-job script failed: {exc.output}")
 
         if not res.startswith("OK"):
-            raise ValueError(res[4:])
+            raise ValueError(res[4:] if len(res) > 4 else res)
 
         return {"message": "Setup updated successfully"}
-    except Exception as e:
-        logger.error(f"Error updating setup details: {str(e)}")
-        return {"error": str(e)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error updating setup: {exc}")
+        return {"error": str(exc)}
 
 
-## Utility function used in run_job
-def read_status_file(job_dir):
-    """
-    Attempts to read the status file for a job, handling potential issues on Windows where
-    the file might be locked by another process.
-
-    :param job_dir: The job directory containing the 'status' file.
-    :return: A list containing the status information or None if the file could not be read.
-    """
-    status = None
-    safety = 0
-    while not status and safety < 1000:
-        try:
-            if safety != 0:
-                time.sleep(0.001)
-            safety += 1
-            with open(os.path.join(job_dir, "status")) as fp:
-                status = fp.readline().strip().split()
-        except IOError:
-            pass  # You may log the error here if needed
-    if safety == 1000:
-        print("Failed to read the status file after multiple attempts.")
-    return status
-
+# =============================================================================
+# Run job  (API creates DB row + Kubernetes Job; runner pod does the work)
+# =============================================================================
 
 @app.post("/run-job")
-async def run_job(current_user=Depends(get_current_user)):
+async def run_job(request: Request, current_user=Depends(get_current_user)):
+    data = await request.json()
+    job_name = data.get("job_name", "")
+
     try:
-        selected_job_name = selected_job_name_by_user.get(current_user["id"])
-        if not selected_job_name:
-            raise HTTPException(status_code=400, detail="No job selected")
+        validate_job_name(job_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
 
-        shared_job_path = get_shared_job_path(current_user, selected_job_name)
+    # Determine current status from Filestore
+    status = "UNCONFIGURED"
+    if os.path.exists(os.path.join(job_path, "data_genie")):
+        status = "RUNNABLE"
+        if os.path.exists(os.path.join(job_path, "status")):
+            parts = read_status_file(job_path)
+            status = parts[0] if parts else "ERROR"
 
-        if not os.path.isdir(shared_job_path):
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        # Check if the shared job is in a runnable state
-        status = "UNCONFIGURED"
-        if os.path.exists(os.path.join(shared_job_path, "data_genie")):
-            status = "RUNNABLE"
-            if os.path.exists(os.path.join(shared_job_path, "status")):
-                status_parts = read_status_file(shared_job_path)
-                if status_parts:
-                    status = status_parts[0]
-                else:
-                    status = "ERROR"
-
-        if status not in ["RUNNABLE", "PAUSED"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Job '{selected_job_name}' is not configured or runnable.",
-            )
-
-        exe = os.path.join(
-            ctoaster_jobs,
-            "MODELS",
-            ctoaster_version,
-            sys.platform.upper(),
-            "ship",
-            "carrotcake.exe",
+    if status not in ("RUNNABLE", "PAUSED", "RUNNING"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job '{job_name}' is not in a runnable state (current: {status}).",
         )
 
-        if not os.path.exists(exe):
-            raise HTTPException(
-                status_code=500, detail=f"Executable not found at {exe}"
-            )
-
-        run_id = new_run_id()
-        shared_job_path, workspace_job_path = stage_shared_job_to_workspace(
-            current_user, selected_job_name, run_id
+    # Ensure there is no active run already in the DB
+    job_record = upsert_job_record(int(current_user["id"]), job_name, job_path)
+    active = get_active_run_for_job(job_record["id"])
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job '{job_name}' already has an active run (run_id={active['run_id']}).",
         )
 
-        # Copy executable into workspace, not shared storage
-        runexe = os.path.join(workspace_job_path, "carrotcake-ship.exe")
-        if os.path.exists(runexe):
-            os.remove(runexe)
-        shutil.copy(exe, runexe)
+    run_id = uuid.uuid4().hex
+    k8s_namespace = os.environ.get("K8S_NAMESPACE", "default")
 
-        # Handle resuming a paused job
-        command_file_path = os.path.join(workspace_job_path, "command")
-        if os.path.exists(command_file_path):
-            os.remove(command_file_path)
-
-        if status == "PAUSED":
-            status_parts = read_status_file(shared_job_path)
-            if status_parts and len(status_parts) >= 4:
-                _, koverall, _, genie_clock = status_parts[:4]
-                with open(command_file_path, "w") as command_file:
-                    command_file.write(f"GUI_RESTART {koverall} {genie_clock}\n")
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Status file does not contain the required parameters to resume the job.",
-                )
-
-        # Run inside workspace
-        log_file_path = os.path.join(workspace_job_path, "run.log")
-        with open(log_file_path, "a") as log_file:
-            process = sp.Popen(
-                [runexe],
-                cwd=workspace_job_path,
-                stdout=log_file,
-                stderr=sp.STDOUT,
-            )
-        existing = get_active_run(current_user, selected_job_name)
-        if existing and existing["process"].poll() is None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Job '{selected_job_name}' is already running",
-            )
-
-        entry = register_active_run(
-            current_user,
-            selected_job_name,
-            run_id,
-            shared_job_path,
-            workspace_job_path,
-            process,
+    try:
+        k8s_job_name = create_runner_job(
+            run_id=run_id,
+            job_id=job_record["id"],
+            user_id=int(current_user["id"]),
+            job_name=job_name,
+            namespace=k8s_namespace,
         )
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Failed to create Kubernetes Job for run {run_id}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Could not create runner job: {exc}")
 
-        # Initial sync-back so logs/status/command/exe appear in shared storage immediately
-        sync_workspace_back_to_shared(shared_job_path, workspace_job_path)
-        entry["last_sync_at"] = time.time()
+    create_run(
+        job_id=job_record["id"],
+        user_id=int(current_user["id"]),
+        run_id=run_id,
+        k8s_job_name=k8s_job_name,
+        shared_run_path=job_path,
+    )
 
-        entry["sync_task"] = asyncio.create_task(
-            periodic_sync_active_run(current_user, selected_job_name)
-        )
-        entry["watch_task"] = asyncio.create_task(
-            watch_active_run(current_user, selected_job_name)
-        )
+    logger.info(f"Run {run_id} submitted for job '{job_name}' (k8s job: {k8s_job_name})")
+    return {
+        "message": f"Job '{job_name}' submitted for execution",
+        "run_id": run_id,
+        "k8s_job_name": k8s_job_name,
+    }
 
-        return {
-            "message": f"Job '{selected_job_name}' is now running",
-            "run_id": run_id,
-            "workspace": workspace_job_path,
-        }
 
-    except FileNotFoundError as fnfe:
-        error_message = f"File not found error: {str(fnfe)}"
-        logger.error(error_message)
-        raise HTTPException(status_code=500, detail=error_message)
-    except Exception as e:
-        error_message = f"Unexpected error running job '{selected_job_name}': {str(e)}"
-        logger.error(error_message)
-        raise HTTPException(status_code=500, detail=error_message)
+# =============================================================================
+# Pause job  (writes PAUSE command to Filestore; runner reads it)
+# =============================================================================
 
 @app.post("/pause-job")
-async def pause_job(current_user=Depends(get_current_user)):
+async def pause_job(request: Request, current_user=Depends(get_current_user)):
+    data = await request.json()
+    job_name = data.get("job_name", "")
+
     try:
-        selected_job_name = selected_job_name_by_user.get(current_user["id"])
-        if not selected_job_name:
-            raise HTTPException(status_code=400, detail="No job selected")
+        validate_job_name(job_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-        if ctoaster_jobs is None:
-            raise ValueError("ctoaster_jobs is not defined")
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
 
-        job_path = get_effective_job_path(current_user, selected_job_name, prefer_workspace=True)
-        shared_job_path = get_shared_job_path(current_user, selected_job_name)
+    status_file = os.path.join(job_path, "status")
+    if not os.path.exists(status_file):
+        raise HTTPException(status_code=400, detail="Job has no status file (not running)")
 
-        if not os.path.isdir(job_path):
-            raise HTTPException(status_code=404, detail="Job not found")
+    with open(status_file) as f:
+        status_line = f.readline().strip()
+    if "PAUSED" in status_line:
+        raise HTTPException(status_code=400, detail="Job is already paused")
 
-        # Check if the job is currently running or paused
-        status_file_path = os.path.join(job_path, "status")
-        if not os.path.exists(status_file_path):
-            raise HTTPException(status_code=400, detail="Job status file not found")
+    # Update desired_state in DB (best-effort)
+    job_record = get_job_record(int(current_user["id"]), job_name)
+    if job_record:
+        active = get_active_run_for_job(job_record["id"])
+        if active:
+            try:
+                update_run(active["run_id"], desired_state="PAUSE_REQUESTED")
+            except Exception as exc:
+                logger.warning(f"DB update for pause failed: {exc}")
 
-        with open(status_file_path, "r") as status_file:
-            status_line = status_file.readline().strip()
-            if "PAUSED" in status_line:
-                raise HTTPException(status_code=400, detail="Job is already paused")
+    # Write PAUSE command to Filestore — runner will read it
+    command_path = os.path.join(job_path, "command")
+    with open(command_path, "w") as f:
+        f.write("PAUSE\n")
 
-        # Write the PAUSE command to the command file
-        command_file_path = os.path.join(job_path, "command")
-        with open(command_file_path, "w") as command_file:
-            command_file.write("PAUSE\n")
-        if job_path != shared_job_path:
-            sync_workspace_back_to_shared(shared_job_path, job_path)
+    return {"message": f"Job '{job_name}' pause requested"}
 
-        return {"message": f"Job '{selected_job_name}' has been paused"}
-    except Exception as e:
-        error_message = f"Unexpected error pausing job '{selected_job_name}': {str(e)}"
-        logger.error(error_message)
-        raise HTTPException(status_code=500, detail=error_message)
 
+# =============================================================================
+# Log / output streaming  (reads directly from Filestore)
+# =============================================================================
 
 @app.get("/get-log/{job_name}")
 async def get_log(job_name: str, current_user=Depends(get_current_user)):
-    if not job_name:
-        raise HTTPException(status_code=400, detail="No job specified")
-
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = _job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     if not os.path.exists(log_file_path):
-        logger.info(f"Log file not found at: {log_file_path}")
-        # Return empty content instead of raising 404
         return {"content": ""}
 
-    # Read the entire log file content
-    with open(log_file_path, "r") as log_file:
-        content = log_file.read()
-
-    return {"content": content}
+    with open(log_file_path) as f:
+        return {"content": f.read()}
 
 
-# SSE endpoint to stream job output
 @app.get("/stream-output/{job_name}")
-async def stream_output(job_name: str, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
-    """
-    Stream the output of the specified job using Server-Sent Events (SSE).
-    """
-    if not job_name:
-        raise HTTPException(status_code=400, detail="No job specified")
-
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+async def stream_output(
+    job_name: str,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    job_path = _job_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
-    # Wait for the log file to be created (retry mechanism)
-    max_retries = 30  # Maximum number of retries
-    retry_interval = 1  # Time in seconds between retries
-    retry_count = 0
+    # Wait up to 30 seconds for the runner to create the log file
+    for _ in range(30):
+        if os.path.exists(log_file_path):
+            break
+        logger.info(f"Waiting for log file: {log_file_path}")
+        await asyncio.sleep(1)
 
-    while not os.path.exists(log_file_path) and retry_count < max_retries:
-        logger.info(f"Waiting for log file to be created at: {log_file_path}")
-        await asyncio.sleep(retry_interval)
-        retry_count += 1
-
-    # If the log file is still not found, raise a 404 error
     if not os.path.exists(log_file_path):
-        logger.error(f"Log file not found at: {log_file_path}")
-        raise HTTPException(
-            status_code=404, detail=f"Log file not found at: {log_file_path}"
-        )
+        raise HTTPException(status_code=404, detail=f"Log file not found: {log_file_path}")
 
-    # Function to read the log file line by line
-    async def log_file_reader():
-        with open(log_file_path, "r") as log_file:
-            log_file.seek(0, os.SEEK_END)  # Start at the end of the file
+    async def log_reader():
+        with open(log_file_path) as f:
+            f.seek(0, os.SEEK_END)
             while True:
-                line = log_file.readline()
+                line = f.readline()
                 if line:
                     yield f"data: {line.strip()}\n\n"
                 else:
-                    await asyncio.sleep(1)  # Wait for new data
+                    await asyncio.sleep(1)
 
-    # Start streaming the log file to the client
-    return StreamingResponse(log_file_reader(), media_type="text/event-stream")
-# Namelist Apis
+    return StreamingResponse(log_reader(), media_type="text/event-stream")
 
+
+# =============================================================================
+# Namelists
+# =============================================================================
 
 @app.get("/jobs/{job_id}/namelists")
 def get_namelists(job_id: str, current_user=Depends(get_current_user)):
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
+    job_dir = _job_path(current_user, job_id)
+    _ensure_job_exists(job_dir, job_id)
+    _ensure_owner(job_dir, current_user)
 
-    job_dir = get_user_job_path(current_user, job_id)
-
-    if not os.path.isdir(job_dir):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(job_dir, current_user)
-
-    # List files in job_dir that start with 'data_' and are files
-    namelists = []
-    for filename in os.listdir(job_dir):
-        file_path = os.path.join(job_dir, filename)
-        if filename.startswith("data_") and os.path.isfile(file_path):
-            namelist_name = filename[len("data_") :]  # Remove 'data_' prefix
-            namelists.append(namelist_name)
-
+    namelists = [
+        fname[len("data_"):]
+        for fname in os.listdir(job_dir)
+        if fname.startswith("data_") and os.path.isfile(os.path.join(job_dir, fname))
+    ]
     return {"namelists": namelists}
 
 
 @app.get("/jobs/{job_id}/namelists/{namelist_name}")
 def get_namelist_content(job_id: str, namelist_name: str, current_user=Depends(get_current_user)):
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
+    job_dir = _job_path(current_user, job_id)
+    _ensure_job_exists(job_dir, job_id)
+    _ensure_owner(job_dir, current_user)
 
-    job_dir = get_user_job_path(current_user, job_id)
-
-    if not os.path.isdir(job_dir):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(job_dir, current_user)
-
-    # Sanitize namelist_name to prevent directory traversal
-    safe_namelist_name = os.path.basename(namelist_name)
-
-    # Construct the filename by adding 'data_' prefix
-    namelist_filename = f"data_{safe_namelist_name}"
-    namelist_file_path = os.path.join(job_dir, namelist_filename)
-
-    if not os.path.isfile(namelist_file_path):
+    safe_name = os.path.basename(namelist_name)
+    namelist_path = os.path.join(job_dir, f"data_{safe_name}")
+    if not os.path.isfile(namelist_path):
         raise HTTPException(status_code=404, detail="Namelist not found")
 
     try:
-        with open(namelist_file_path, "r") as file:
-            content = file.read()
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error reading namelist file: {str(e)}"
-        )
+        with open(namelist_path) as f:
+            content = f.read()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading namelist: {exc}")
 
-    return {"namelist_name": safe_namelist_name, "content": content}
+    return {"namelist_name": safe_name, "content": content}
 
+
+# =============================================================================
+# Plot data (data files list, variables, batch fetch, SSE stream)
+# =============================================================================
 
 @app.get("/get_data_files_list/{job_name}")
 async def get_data_files_list(job_name: str, current_user=Depends(get_current_user)):
-    if not job_name:
-        raise HTTPException(status_code=400, detail="No job specified")
-
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-
-    if not os.path.isdir(shared_job_path):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
-
-    print(":: Resolved plot_data_path ::", plot_data_path)
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
 
     try:
-        # Log all files in the directory for debugging purposes
-        all_files = os.listdir(plot_data_path)
-        print(":: All files in resolved path ::", all_files)
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-        # Match files starting with 'biogem_series'
-        data_file_name_prefix = "biogem_series"
-        data_file_list = [f for f in all_files if f.startswith(data_file_name_prefix)]
+    all_files = os.listdir(plot_data_path)
+    data_files = [f for f in all_files if f.startswith("biogem_series")]
 
-        print(":: List of matching files ::", data_file_list)
-
-        if not data_file_list:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No files found with prefix '{data_file_name_prefix}' in {plot_data_path}",
-            )
-
-        return data_file_list
-
-    except Exception as e:
+    if not data_files:
         raise HTTPException(
-            status_code=500, detail=f"Error fetching data files: {str(e)}"
+            status_code=404,
+            detail=f"No biogem_series files found in {plot_data_path}",
         )
+    return data_files
+
 
 @app.get("/get-variables/{job_name}/{data_file_name}")
-async def get_variables(job_name: str, data_file_name: str, current_user=Depends(get_current_user)):
-    if not job_name or not data_file_name:
-        raise HTTPException(status_code=400, detail="Job name or data file name is missing")
+async def get_variables(
+    job_name: str, data_file_name: str, current_user=Depends(get_current_user)
+):
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
 
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
+    try:
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-    # Construct the job path
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-
-    if not os.path.isdir(shared_job_path):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
-
-    # Construct the full path to the data file
     data_file_path = os.path.join(plot_data_path, data_file_name)
-
-    # Check if the data file exists
     if not os.path.isfile(data_file_path):
         raise HTTPException(status_code=404, detail="Data file not found")
 
-    # Read the file and extract variables from the header line
     try:
-        with open(data_file_path, 'r') as file:
-            header_line = file.readline().strip()
-            # Extract variables based on everything after '/' in the header
-            variables = [var.strip() for var in header_line.split('/')[1:]]  # Skip the first column
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+        with open(data_file_path) as f:
+            header = f.readline().strip()
+        variables = [v.strip() for v in header.split("/")[1:]]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading data file: {exc}")
 
     if not variables:
-        raise HTTPException(status_code=404, detail="No variables found in the data file")
-
-    # Return the list of variables directly
+        raise HTTPException(status_code=404, detail="No variables found in data file")
     return variables
 
 
-from pydantic import BaseModel
-
-# Request body model for the POST API
 class PlotDataRequest(BaseModel):
     job_name: str
     data_file_name: str
     variable: str
 
+
 @app.post("/get-plot-data")
 async def get_plot_data(request: PlotDataRequest, current_user=Depends(get_current_user)):
-    job_name = request.job_name
-    data_file_name = request.data_file_name
-    variable = request.variable
+    job_path = _job_path(current_user, request.job_name)
+    _ensure_job_exists(job_path, request.job_name)
+    _ensure_owner(job_path, current_user)
 
-    if not job_name or not data_file_name or not variable:
-        raise HTTPException(status_code=400, detail="Job name, data file, or variable is missing")
+    try:
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    # Construct the job path
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-
-    if not os.path.isdir(shared_job_path):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
-
-    # Construct the full path to the data file
-    data_file_path = os.path.join(plot_data_path, data_file_name)
-
-    # Check if the data file exists
+    data_file_path = os.path.join(plot_data_path, request.data_file_name)
     if not os.path.isfile(data_file_path):
         raise HTTPException(status_code=404, detail="Data file not found")
 
-    # Read the file and extract data for the selected variable
     try:
-        with open(data_file_path, 'r') as file:
-            header_line = file.readline().strip()
-            columns = header_line.split('/')  # Split by '/' to match the column names
-            columns = [col.strip() for col in columns]
-
-            # Get the first column name and the index of the selected variable
-            first_column_name = columns[0]  # Use the original first column name
-            if variable not in columns:
-                raise HTTPException(status_code=404, detail="Variable not found in the data file")
-
-            variable_index = columns.index(variable)
-
-            # Read the data lines and extract the values for the first column and selected variable
+        with open(data_file_path) as f:
+            header = f.readline().strip()
+            columns = [c.strip() for c in header.split("/")]
+            first_col = columns[0]
+            if request.variable not in columns:
+                raise HTTPException(status_code=404, detail="Variable not found in data file")
+            var_idx = columns.index(request.variable)
             data = []
-            for line in file:
+            for line in f:
                 parts = line.strip().split()
-                if len(parts) > variable_index:
+                if len(parts) > var_idx:
                     try:
-                        first_column_value = float(parts[0])  # Value of the first column
-                        data_value = float(parts[variable_index])
-                        data.append([first_column_value, data_value])  # Store as [first_column_value, data_value] pair
+                        data.append([float(parts[0]), float(parts[var_idx])])
                     except ValueError:
-                        continue  # Skip lines with invalid data
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+                        continue
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading data file: {exc}")
 
     if not data:
-        raise HTTPException(status_code=404, detail="No data found for the selected variable")
+        raise HTTPException(status_code=404, detail="No data found for selected variable")
 
-    # Return the original column names and data
-    return {
-        "columns": [first_column_name, variable],
-        "data": data
-    }
+    return {"columns": [first_col, request.variable], "data": data}
 
-from typing import Generator
-from fastapi.responses import StreamingResponse, FileResponse
-import tempfile
-import shutil
 
-def trim_variable(variable: str) -> str:
-    """Trim and normalize the variable by removing leading/trailing spaces."""
-    return variable.strip()
+def _trim(s: str) -> str:
+    return s.strip()
 
-async def read_data_file(file_path: str, variable: str) -> Generator[str, None, None]:
-    """Generator function to yield existing and new data as it is written to the file."""
+
+async def _read_data_file_sse(
+    file_path: str, variable: str
+) -> Generator[str, None, None]:
+    """Async generator: stream existing rows then tail for new ones (SSE format)."""
     try:
-        with open(file_path, 'r') as file:
-            # Read header and split by '/'
-            header_line = file.readline().strip()
-            columns = header_line.split('/')  # Adjust delimiter if needed
-            trimmed_columns = [trim_variable(col) for col in columns]
-            trimmed_variable = trim_variable(variable)
+        with open(file_path) as f:
+            header = f.readline().strip()
+            cols = [_trim(c) for c in header.split("/")]
+            var = _trim(variable)
+            if var not in cols:
+                raise HTTPException(status_code=404, detail=f"Variable '{variable}' not found")
+            idx = cols.index(var)
 
-            if trimmed_variable not in trimmed_columns:
-                logger.error(f"Variable '{trimmed_variable}' not found in columns: {trimmed_columns}")
-                raise HTTPException(status_code=404, detail=f"Variable '{variable}' not found in the file")
-
-            variable_index = trimmed_columns.index(trimmed_variable)
-
-            # Step 1: Stream all existing data in the file
+            # Stream existing data
             while True:
-                line = file.readline()
+                line = f.readline()
                 if not line:
-                    break  # Stop when we reach the end of existing data
-                
-                parts = line.strip().split()  # Use whitespace delimiter (same as POST endpoint)
-                if len(parts) > variable_index:
+                    break
+                parts = line.strip().split()
+                if len(parts) > idx:
                     try:
-                        first_column_value = float(parts[0])
-                        data_value = float(parts[variable_index])
-                        yield f"data: {first_column_value},{data_value}\n\n"
+                        yield f"data: {float(parts[0])},{float(parts[idx])}\n\n"
                     except ValueError:
-                        continue  # Skip lines with invalid data
+                        continue
 
-            # Step 2: Tail the file for new data
-            file.seek(0, os.SEEK_END)  # Move to the end of the file to start tailing
+            # Tail for new data
+            f.seek(0, os.SEEK_END)
             while True:
-                line = file.readline()
+                line = f.readline()
                 if not line:
-                    await asyncio.sleep(0.5)  # Sleep briefly to wait for new data
+                    await asyncio.sleep(0.5)
                     continue
-
-                parts = line.strip().split()  # Use whitespace delimiter (same as POST endpoint)
-                if len(parts) > variable_index:
+                parts = line.strip().split()
+                if len(parts) > idx:
                     try:
-                        first_column_value = float(parts[0])
-                        data_value = float(parts[variable_index])
-                        yield f"data: {first_column_value},{data_value}\n\n"
+                        yield f"data: {float(parts[0])},{float(parts[idx])}\n\n"
                     except ValueError:
-                        continue  # Skip lines with invalid data
-    except HTTPException as http_exc:
-        raise http_exc
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading the data file: {str(e)}")
+                        continue
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading data file: {exc}")
 
-@app.get("/jobs/{job_name}/download")
-async def download_job_zip(job_name: str, background_tasks: BackgroundTasks, current_user=Depends(get_current_user)):
-    """
-    Package the entire job directory into a zip and stream it back.
-    """
-    if not job_name:
-        raise HTTPException(status_code=400, detail="Job name is required")
-    if ctoaster_jobs is None:
-        raise ValueError("ctoaster_jobs is not defined")
-
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    if not os.path.isdir(shared_job_path):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-
-    effective_job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
-    if effective_job_path != shared_job_path:
-        sync_workspace_back_to_shared(shared_job_path, effective_job_path)
-
-    # Create a temporary directory to hold the archive
-    tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
-    zip_base = os.path.join(tmpdir, job_name)
-    archive_path = shutil.make_archive(zip_base, "zip", shared_job_path)
-
-    # Cleanup temp dir after response is sent
-    def _cleanup():
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    background_tasks.add_task(_cleanup)
-
-    return FileResponse(
-        path=archive_path,
-        media_type="application/zip",
-        filename=f"{job_name}.zip",
-        background=background_tasks,
-    )
 
 @app.get("/get-plot-data-stream")
 async def get_plot_data_stream(
@@ -1552,19 +969,48 @@ async def get_plot_data_stream(
     variable: str = Query(...),
     current_user=Depends(get_current_user),
 ):
-    """GET API to stream data for plotting in real-time."""
-    shared_job_path = get_shared_job_path(current_user, job_name)
-    job_path = get_effective_job_path(current_user, job_name, prefer_workspace=True)
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
 
-    if not os.path.isdir(shared_job_path):
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    ensure_job_owner(shared_job_path, current_user)
-    plot_data_path = find_plot_data_path(job_path)
+    try:
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
     data_file_path = os.path.join(plot_data_path, data_file_name)
     if not os.path.isfile(data_file_path):
         raise HTTPException(status_code=404, detail="Data file not found")
 
-    # Return streaming response for real-time data
-    return StreamingResponse(read_data_file(data_file_path, variable), media_type="text/event-stream")
+    return StreamingResponse(
+        _read_data_file_sse(data_file_path, variable),
+        media_type="text/event-stream",
+    )
+
+
+# =============================================================================
+# Download job zip
+# =============================================================================
+
+@app.get("/jobs/{job_name}/download")
+async def download_job_zip(
+    job_name: str,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
+
+    tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
+    zip_base = os.path.join(tmpdir, job_name)
+    archive_path = shutil.make_archive(zip_base, "zip", job_path)
+
+    background_tasks.add_task(shutil.rmtree, tmpdir, True)
+
+    return FileResponse(
+        path=archive_path,
+        media_type="application/zip",
+        filename=f"{job_name}.zip",
+        background=background_tasks,
+    )

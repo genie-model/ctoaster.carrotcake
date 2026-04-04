@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# RBAC for the stateless API tier
+#
+# The API pods need permission to create, inspect, and delete Kubernetes Jobs
+# (and read their Pods) in the same namespace so they can submit runner jobs.
+# ---------------------------------------------------------------------------
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ctoaster-api
+  namespace: ctoaster
+  # Workload Identity annotation — replace with your GCP project + GSA if you
+  # are using Workload Identity for Cloud SQL Auth Proxy (recommended):
+  # annotations:
+  #   iam.gke.io/workload-identity-pool: "<PROJECT_ID>.svc.id.goog"
+  #   iam.gke.io/gcp-service-account: "ctoaster-api@<PROJECT_ID>.iam.gserviceaccount.com"
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ctoaster-api-role
+  namespace: ctoaster
+rules:
+  # Full Job lifecycle so the API can submit, inspect, and clean up runner jobs
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
+  # Read pod status/logs for runner jobs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ctoaster-api-rolebinding
+  namespace: ctoaster
+subjects:
+  - kind: ServiceAccount
+    name: ctoaster-api
+    namespace: ctoaster
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: ctoaster-api-role

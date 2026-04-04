@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# Runner Job — REFERENCE TEMPLATE ONLY
+#
+# This file is NOT applied directly with kubectl.  It documents the Job spec
+# that tools/k8s_jobs.py generates at runtime for each science run.
+#
+# k8s_jobs.py creates one Job per run, naming it:
+#   ctoaster-runner-<run_id_first_12_chars>
+#
+# The API pod (which holds the ctoaster-api ServiceAccount) calls
+# batch/v1 create_namespaced_job() to materialise a real Job from this shape.
+# ---------------------------------------------------------------------------
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Populated dynamically by k8s_jobs.create_runner_job():
+  #   name: ctoaster-runner-<run_id[:12]>
+  name: ctoaster-runner-<RUN_ID>
+  namespace: ctoaster
+  labels:
+    app: ctoaster-runner
+    run-id: "<RUN_ID>"
+    job-id: "<JOB_ID>"
+    user-id: "<USER_ID>"
+spec:
+  # Never retry — if the science code fails, the run state is set to FAILED
+  # in the DB and the operator can diagnose via pod logs.
+  backoffLimit: 0
+
+  # Kubernetes automatically deletes the finished Job (and its pods) after
+  # one hour, keeping the namespace tidy.  Increase if you want longer log
+  # retention in the pod itself (Cloud Logging captures stdout regardless).
+  ttlSecondsAfterFinished: 3600
+
+  template:
+    metadata:
+      labels:
+        app: ctoaster-runner
+        run-id: "<RUN_ID>"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ctoaster-api   # reuse same SA; runner only needs Filestore access
+
+      containers:
+        - name: runner
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<IMAGE_TAG>
+          imagePullPolicy: Always
+
+          # Entrypoint — tools/__init__.py makes tools a proper package
+          command: ["python", "-m", "tools.runner"]
+
+          env:
+            - name: RUN_ID
+              value: "<RUN_ID>"
+            - name: JOB_ID
+              value: "<JOB_ID>"
+            - name: USER_ID
+              value: "<USER_ID>"
+            - name: JOB_NAME
+              value: "<JOB_NAME>"
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ctoaster-secrets
+                  key: db-url
+            - name: FILESTORE_ROOT
+              value: "/ctoaster-filestore"
+            - name: CTOASTER_SYNC_INTERVAL_SECONDS
+              value: "2.0"
+
+          volumeMounts:
+            # Shared Filestore — runner reads job files from here and writes
+            # results back once the science run completes.
+            - name: filestore-volume
+              mountPath: /ctoaster-filestore
+            # Local ephemeral scratch space — the runner stages a copy of the
+            # job here so Fortran I/O is fast (no NFS latency during execution).
+            - name: workspace
+              mountPath: /workspace
+
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+
+      volumes:
+        - name: filestore-volume
+          persistentVolumeClaim:
+            claimName: ctoaster-filestore-pvc
+        - name: workspace
+          emptyDir: {}
