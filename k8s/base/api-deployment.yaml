@@ -99,19 +99,24 @@ spec:
         # -----------------------------------------------------------------------
         # Cloud SQL Auth Proxy sidecar
         # Connects to Cloud SQL so the API (and init container above) can reach
-        # Postgres at 127.0.0.1:5432 without a public IP.
+        # Postgres at 127.0.0.1:5432.
         #
-        # Workload Identity is the preferred auth method — no key file needed
-        # when the GSA/KSA binding is set up.  See api-rbac.yaml annotation.
+        # Authentication uses a downloaded SA key file mounted from the
+        # "cloudsql-sa-key" secret (created in Step 12 of the deployment guide).
         # -----------------------------------------------------------------------
         - name: cloudsql-proxy
           image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.11.4
           args:
             - "--structured-logs"
             - "--port=5432"
+            - "--credentials-file=/secrets/cloudsql/key.json"
             - "<PROJECT_ID>:<REGION>:<INSTANCE>"   # replace: e.g. ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
           securityContext:
             runAsNonRoot: true
+          volumeMounts:
+            - name: cloudsql-sa-key
+              mountPath: /secrets/cloudsql
+              readOnly: true
           resources:
             requests:
               cpu: "50m"
@@ -124,3 +129,6 @@ spec:
         - name: filestore-volume
           persistentVolumeClaim:
             claimName: ctoaster-filestore-pvc
+        - name: cloudsql-sa-key
+          secret:
+            secretName: cloudsql-sa-key

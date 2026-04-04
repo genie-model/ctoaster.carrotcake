@@ -10,11 +10,6 @@ kind: ServiceAccount
 metadata:
   name: ctoaster-api
   namespace: ctoaster
-  # Workload Identity annotation — replace with your GCP project + GSA if you
-  # are using Workload Identity for Cloud SQL Auth Proxy (recommended):
-  # annotations:
-  #   iam.gke.io/workload-identity-pool: "<PROJECT_ID>.svc.id.goog"
-  #   iam.gke.io/gcp-service-account: "ctoaster-api@<PROJECT_ID>.iam.gserviceaccount.com"
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
