@@ -321,7 +321,7 @@ def get_workspace_root() -> str:
     return os.environ.get("CTOASTER_WORK_ROOT", "/tmp/ctoaster-workspaces")
 
 def new_run_id() -> str:
-    return datetime.utcnow().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    return datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
 
 def get_workspace_job_path(user: dict, job_name: str, run_id: str) -> str:
     validate_job_name(job_name)
