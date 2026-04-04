@@ -39,7 +39,7 @@ spec:
     driver: filestore.csi.storage.gke.io
     volumeHandle: "modeInstance/us-west2-a/ctoaster-filestore/ctoaster_data"
     volumeAttributes:
-      ip: "<FILESTORE_IP>"         # replace with the Filestore NFS IP address
+      ip: "10.236.81.178"
       volume: "ctoaster_data"
 
 ---
