@@ -47,9 +47,9 @@ spec:
                 name: ctoaster-api-service
                 port:
                   number: 80
-          # Frontend: everything else
-          - path: /
-            pathType: Prefix
+          # Frontend: everything else (regex with capture group so $2 passes the full path through)
+          - path: /()(.*) 
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: ctoaster-frontend-service
