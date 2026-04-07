@@ -34,6 +34,7 @@ metadata:
     nginx.ingress.kubernetes.io/enable-cors: "true"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
 spec:
+  ingressClassName: nginx
   rules:
     - host: ""   # Leave empty to match any hostname / IP. Set to your domain if available.
       http:
