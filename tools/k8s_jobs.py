@@ -81,7 +81,7 @@ def create_runner_job(
             "Set it to the full Docker image tag for the ctoaster backend."
         )
 
-    pvc_name = os.environ.get("FILESTORE_PVC_NAME", "ctoaster-jobs-pvc")
+    pvc_name = os.environ.get("FILESTORE_PVC_NAME", "ctoaster-filestore-pvc")
     filestore_root = os.environ.get("FILESTORE_ROOT", "/ctoaster-filestore")
     db_url = os.environ.get("DB_URL", "")
     jwt_secret = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
@@ -123,8 +123,8 @@ def create_runner_job(
             ),
         ],
         resources=client.V1ResourceRequirements(
-            requests={"cpu": "500m", "memory": "512Mi"},
-            limits={"cpu": "2000m", "memory": "2Gi"},
+            requests={"cpu": "200m", "memory": "256Mi"},
+            limits={"cpu": "2000m", "memory": "4Gi"},
         ),
     )
 
