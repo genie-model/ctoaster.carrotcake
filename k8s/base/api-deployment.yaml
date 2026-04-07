@@ -40,7 +40,7 @@ spec:
         # Main API container
         # -----------------------------------------------------------------------
         - name: api
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0
+          image: us-west2-docker.pkg.dev/ctoaster-test-deploy/cupcake/ctoaster-backend:v2.0.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -61,7 +61,7 @@ spec:
             # Image used by k8s_jobs.py when creating runner Job pods.
             # Keep in sync with the image tag above.
             - name: RUNNER_IMAGE
-              value: "us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0"
+              value: "us-west2-docker.pkg.dev/ctoaster-test-deploy/cupcake/ctoaster-backend:v2.0.0"
             - name: K8S_NAMESPACE
               value: "ctoaster"
           volumeMounts:
@@ -101,7 +101,7 @@ spec:
             - "--structured-logs"
             - "--port=5432"
             - "--credentials-file=/secrets/cloudsql/key.json"
-            - ""   # replace: e.g. ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
+            - ""   # replace: e.g. ctoaster-test-deploy:us-west2:ctoaster-db
           securityContext:
             runAsNonRoot: true
           volumeMounts:

@@ -26,7 +26,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/cupcake-frontend:v2.0.0
+          image: us-west2-docker.pkg.dev/ctoaster-test-deploy/cupcake/cupcake-frontend:v2.0.0
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
