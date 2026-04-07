@@ -520,5 +520,5 @@ def list_artifacts(run_id: str) -> List[Dict]:
 
 def _postgres_lastval(cur) -> int:
     """After an INSERT in Postgres, retrieve the generated id via lastval()."""
-    cur.execute("SELECT lastval()")
-    return cur.fetchone()[0]
+    cur.execute("SELECT lastval() AS id")
+    return cur.fetchone()["id"]
