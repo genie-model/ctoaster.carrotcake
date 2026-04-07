@@ -182,10 +182,14 @@ class ModelConfig:
 
 
 def available_versions():
-    git_versions = sp.check_output(["git", "tag", "-l"]).splitlines()
-    str_git_versions = [x.decode("utf-8") for x in git_versions]
+    try:
+        git_versions = sp.check_output(
+            ["git", "tag", "-l"], stderr=sp.DEVNULL
+        ).splitlines()
+        str_git_versions = [x.decode("utf-8") for x in git_versions]
+    except (sp.CalledProcessError, FileNotFoundError):
+        str_git_versions = []
     return ["DEVELOPMENT"] + str_git_versions
-    ###return ['DEVELOPMENT'] + sp.check_output(['git', 'tag', '-l']).splitlines()
 
 
 # Set up repository clone for building model at explicitly
