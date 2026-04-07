@@ -35,15 +35,6 @@ spec:
     spec:
       serviceAccountName: ctoaster-api
 
-      # -----------------------------------------------------------------------
-      # Init container: wait for Cloud SQL proxy to be ready before starting
-      # the API.  Remove if not using Cloud SQL.
-      # -----------------------------------------------------------------------
-      initContainers:
-        - name: wait-for-db
-          image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z 127.0.0.1 5432; do echo "waiting for DB proxy..."; sleep 2; done']
-
       containers:
         # -----------------------------------------------------------------------
         # Main API container
