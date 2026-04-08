@@ -646,10 +646,15 @@ async def run_job(request: Request, current_user=Depends(get_current_user)):
     job_record = upsert_job_record(int(current_user["id"]), job_name, job_path)
     active = get_active_run_for_job(job_record["id"])
     if active:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Job '{job_name}' already has an active run (run_id={active['run_id']}).",
-        )
+        if active.get("actual_state") == "PAUSED":
+            update_run(active["run_id"], actual_state="CANCELLED",
+                       finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+            logger.info(f"Cancelled previous PAUSED run {active['run_id']} to allow resume")
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job '{job_name}' already has an active run (run_id={active['run_id']}).",
+            )
 
     run_id = uuid.uuid4().hex
     k8s_namespace = os.environ.get("K8S_NAMESPACE", "default")
