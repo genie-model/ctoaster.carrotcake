@@ -84,6 +84,7 @@ def create_runner_job(
     pvc_name = os.environ.get("FILESTORE_PVC_NAME", "ctoaster-filestore-pvc")
     filestore_root = os.environ.get("FILESTORE_ROOT", "/ctoaster-filestore")
     db_url = os.environ.get("DB_URL", "")
+    runner_db_url = os.environ.get("RUNNER_DB_URL", db_url.replace("127.0.0.1", "cloudsql-proxy"))
     jwt_secret = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
 
     k8s_job_name = f"runner-{run_id[:12]}"
@@ -94,7 +95,7 @@ def create_runner_job(
         client.V1EnvVar(name="JOB_ID",              value=str(job_id)),
         client.V1EnvVar(name="USER_ID",             value=str(user_id)),
         client.V1EnvVar(name="JOB_NAME",            value=job_name),
-        client.V1EnvVar(name="DB_URL",              value=db_url),
+        client.V1EnvVar(name="DB_URL",              value=runner_db_url),
         client.V1EnvVar(name="FILESTORE_ROOT",      value=filestore_root),
         client.V1EnvVar(name="CTOASTER_JWT_SECRET", value=jwt_secret),
         client.V1EnvVar(name="WORKSPACE_ROOT",      value="/workspace"),
