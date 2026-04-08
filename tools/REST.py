@@ -180,11 +180,14 @@ def _ensure_owner(job_path: str, user: dict) -> None:
     """
     Verify the job belongs to the requesting user via owner.json.
     In the per-user-subdir layout the path itself already enforces ownership,
-    but we keep this check as a defence-in-depth guard.
+    so if owner.json is missing we fall back to checking the path contains the user ID.
     """
     owner = read_owner(job_path)
     if owner is None:
-        raise HTTPException(status_code=403, detail="Job ownership file missing")
+        expected_prefix = os.path.join(get_user_root(int(user["id"])), "")
+        if not job_path.startswith(expected_prefix):
+            raise HTTPException(status_code=403, detail="Job ownership could not be verified")
+        return
     if str(owner.get("user_id")) != str(user["id"]):
         raise HTTPException(status_code=403, detail="Job not owned by this user")
 
