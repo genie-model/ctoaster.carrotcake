@@ -110,7 +110,7 @@ def create_runner_job(
     container = client.V1Container(
         name="runner",
         image=runner_image,
-        image_pull_policy="Always",
+        image_pull_policy="IfNotPresent",
         command=["python", "-m", "tools.runner"],
         env=env_vars,
         volume_mounts=[
