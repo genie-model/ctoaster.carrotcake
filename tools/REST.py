@@ -196,6 +196,20 @@ def _ensure_job_exists(job_path: str, job_name: str) -> None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
 
 
+def _force_remove_dir(path: str) -> None:
+    """Remove a directory tree, handling NFS stale filehandle (.nfs*) leftovers."""
+    shutil.rmtree(path, ignore_errors=True)
+    if not os.path.isdir(path):
+        return
+    time.sleep(0.5)
+    shutil.rmtree(path, ignore_errors=True)
+    if not os.path.isdir(path):
+        return
+    sp.run(["rm", "-rf", path], check=False)
+    if os.path.isdir(path):
+        raise HTTPException(status_code=500, detail="Could not fully remove job directory")
+
+
 def _ensure_owner(job_path: str, user: dict) -> None:
     """
     Verify the job belongs to the requesting user via owner.json.
@@ -414,10 +428,7 @@ def delete_job(job_name: str = Query(...), current_user=Depends(get_current_user
                     detail=f"Job '{job_name}' has an active run. Pause or cancel it first.",
                 )
 
-    try:
-        shutil.rmtree(job_path)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error deleting job: {exc}")
+    _force_remove_dir(job_path)
 
     try:
         delete_job_record(int(current_user["id"]), job_name)
@@ -1109,7 +1120,7 @@ def admin_delete_user(user_id: int, admin=Depends(require_admin)):
     user_root = get_user_root(user_id)
     if os.path.isdir(user_root):
         try:
-            shutil.rmtree(user_root)
+            _force_remove_dir(user_root)
         except Exception as exc:
             logger.warning(f"Failed to delete Filestore dir {user_root}: {exc}")
 
@@ -1146,7 +1157,7 @@ def admin_delete_job(user_id: int, job_name: str, admin=Depends(require_admin)):
     job_path = get_job_path(user_id, job_name)
     if os.path.isdir(job_path):
         try:
-            shutil.rmtree(job_path)
+            _force_remove_dir(job_path)
         except Exception as exc:
             logger.warning(f"Failed to delete Filestore dir {job_path}: {exc}")
 
