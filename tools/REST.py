@@ -66,7 +66,7 @@ from tools.db import (
     upsert_job_record,
     verify_password,
 )
-from tools.k8s_jobs import create_runner_job, delete_runner_job
+from tools.k8s_jobs import create_runner_job, delete_runner_job, get_runner_job_status
 from tools.storage import (
     find_plot_data_path,
     get_job_path,
@@ -397,15 +397,22 @@ def delete_job(job_name: str = Query(...), current_user=Depends(get_current_user
     _ensure_job_exists(job_path, job_name)
     _ensure_owner(job_path, current_user)
 
-    # Refuse to delete a running job
+    k8s_namespace = os.environ.get("K8S_NAMESPACE", "default")
     job_record = get_job_record(int(current_user["id"]), job_name)
     if job_record:
         active = get_active_run_for_job(job_record["id"])
         if active:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Job '{job_name}' has an active run. Pause or cancel it first.",
-            )
+            k8s_name = active.get("k8s_job_name")
+            k8s_status = get_runner_job_status(k8s_name, k8s_namespace) if k8s_name else None
+            if k8s_status in (None, "succeeded", "failed"):
+                update_run(active["run_id"], actual_state="CANCELLED",
+                           finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+                logger.info(f"Auto-cancelled stale run {active['run_id']} (k8s status: {k8s_status})")
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Job '{job_name}' has an active run. Pause or cancel it first.",
+                )
 
     try:
         shutil.rmtree(job_path)
