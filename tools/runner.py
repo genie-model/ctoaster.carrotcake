@@ -305,16 +305,29 @@ def run() -> None:
     # ── Step 10: determine final state ───────────────────────────────────────
     final_parts = _read_status(workspace_path)
     file_status = final_parts[0] if final_parts else None
+    desired = _desired_state_from_db()
 
     if file_status == "PAUSED":
         actual_state = "PAUSED"
     elif file_status == "COMPLETE" or exit_code == 0:
         actual_state = "COMPLETE"
+    elif desired in ("PAUSE_REQUESTED", "PAUSING") and exit_code != 0:
+        actual_state = "PAUSED"
+        logger.info(
+            f"Process exited with code {exit_code} after PAUSE request; "
+            f"treating as PAUSED (status file said: {file_status!r})"
+        )
+        status_path = os.path.join(workspace_path, "status")
+        if not final_parts or final_parts[0] != "PAUSED":
+            try:
+                with open(status_path, "w") as f:
+                    f.write(f"PAUSED 0 0 0.0\n")
+                logger.info("Wrote fallback PAUSED status (no checkpoint data from model)")
+            except Exception as exc:
+                logger.warning(f"Could not write fallback PAUSED status: {exc}")
     else:
         actual_state = "FAILED"
 
-    # Respect an explicit cancellation
-    desired = _desired_state_from_db()
     if desired in ("CANCEL_REQUESTED", "CANCELLING"):
         actual_state = "CANCELLED"
 
