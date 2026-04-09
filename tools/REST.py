@@ -46,9 +46,12 @@ from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_ve
 
 # ── DB / storage / k8s imports ───────────────────────────────────────────────
 from tools.db import (
+    count_jobs_by_user,
     create_run,
     create_user,
     delete_job_record,
+    delete_user_cascade,
+    force_delete_job_record,
     get_active_run_for_job,
     get_job_record,
     get_run_by_id,
@@ -56,12 +59,14 @@ from tools.db import (
     get_user_by_id,
     hash_password,
     init_db,
+    list_all_active_runs,
+    list_all_users,
     list_user_jobs,
     update_run,
     upsert_job_record,
     verify_password,
 )
-from tools.k8s_jobs import create_runner_job
+from tools.k8s_jobs import create_runner_job, delete_runner_job
 from tools.storage import (
     find_plot_data_path,
     get_job_path,
@@ -101,6 +106,15 @@ logger = logging.getLogger(__name__)
 # ── JWT constants ─────────────────────────────────────────────────────────────
 JWT_SECRET: str = os.environ.get("CTOASTER_JWT_SECRET", "changeme-in-prod")
 TOKEN_TTL_SECONDS: int = 60 * 60 * 24 * 7  # 7 days
+
+# ── Admin emails ──────────────────────────────────────────────────────────────
+ADMIN_EMAILS = set(
+    e.strip().lower()
+    for e in os.environ.get(
+        "ADMIN_EMAILS", "pthak006@ucr.edu,andy@seao2.org"
+    ).split(",")
+    if e.strip()
+)
 
 # ── initialise DB on startup ──────────────────────────────────────────────────
 init_db()
@@ -157,6 +171,12 @@ def get_current_user(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+
+def require_admin(current_user=Depends(get_current_user)):
+    if current_user["email"] not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
 
 
 # =============================================================================
@@ -1022,3 +1042,107 @@ async def download_job_zip(
         filename=f"{job_name}.zip",
         background=background_tasks,
     )
+
+
+# =============================================================================
+# Admin endpoints
+# =============================================================================
+
+@app.get("/admin/users")
+def admin_list_users(admin=Depends(require_admin)):
+    users = list_all_users()
+    job_counts = count_jobs_by_user()
+    for u in users:
+        u["job_count"] = job_counts.get(u["id"], 0)
+    return {"users": users}
+
+
+@app.get("/admin/users/{user_id}/jobs")
+def admin_user_jobs(user_id: int, admin=Depends(require_admin)):
+    jobs = list_user_jobs(user_id)
+    result = []
+    for j in jobs:
+        active = get_active_run_for_job(j["id"])
+        result.append({
+            **j,
+            "active_run": {
+                "run_id": active["run_id"],
+                "actual_state": active["actual_state"],
+                "k8s_job_name": active.get("k8s_job_name"),
+            } if active else None,
+        })
+    return {"jobs": result}
+
+
+@app.get("/admin/runs")
+def admin_active_runs(admin=Depends(require_admin)):
+    return {"runs": list_all_active_runs()}
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: int, admin=Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user["email"] in ADMIN_EMAILS:
+        raise HTTPException(status_code=400, detail="Cannot delete an admin user")
+
+    k8s_namespace = os.environ.get("K8S_NAMESPACE", "default")
+
+    for job in list_user_jobs(user_id):
+        active = get_active_run_for_job(job["id"])
+        if active and active.get("k8s_job_name"):
+            try:
+                delete_runner_job(active["k8s_job_name"], k8s_namespace)
+            except Exception as exc:
+                logger.warning(f"Failed to delete K8s job {active['k8s_job_name']}: {exc}")
+            update_run(active["run_id"], actual_state="CANCELLED",
+                       finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+
+    user_root = get_user_root(user_id)
+    if os.path.isdir(user_root):
+        try:
+            shutil.rmtree(user_root)
+        except Exception as exc:
+            logger.warning(f"Failed to delete Filestore dir {user_root}: {exc}")
+
+    delete_user_cascade(user_id)
+    logger.info(f"Admin deleted user {user_id} ({user['email']})")
+    return {"message": f"User '{user['email']}' and all their data deleted"}
+
+
+@app.delete("/admin/jobs/{user_id}/{job_name}")
+def admin_delete_job(user_id: int, job_name: str, admin=Depends(require_admin)):
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        validate_job_name(job_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    job_record = get_job_record(user_id, job_name)
+    if not job_record:
+        raise HTTPException(status_code=404, detail=f"Job '{job_name}' not found in DB")
+
+    k8s_namespace = os.environ.get("K8S_NAMESPACE", "default")
+    active = get_active_run_for_job(job_record["id"])
+    if active and active.get("k8s_job_name"):
+        try:
+            delete_runner_job(active["k8s_job_name"], k8s_namespace)
+        except Exception as exc:
+            logger.warning(f"Failed to delete K8s job {active['k8s_job_name']}: {exc}")
+        update_run(active["run_id"], actual_state="CANCELLED",
+                   finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+
+    job_path = get_job_path(user_id, job_name)
+    if os.path.isdir(job_path):
+        try:
+            shutil.rmtree(job_path)
+        except Exception as exc:
+            logger.warning(f"Failed to delete Filestore dir {job_path}: {exc}")
+
+    force_delete_job_record(job_record["id"])
+    logger.info(f"Admin deleted job '{job_name}' for user {user_id}")
+    return {"message": f"Job '{job_name}' force-deleted"}

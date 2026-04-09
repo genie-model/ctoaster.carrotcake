@@ -515,6 +515,85 @@ def list_artifacts(run_id: str) -> List[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Admin helpers
+# ---------------------------------------------------------------------------
+
+def list_all_users() -> List[Dict]:
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute("SELECT id, email, created_at FROM users ORDER BY id")
+        return _rows(cur.fetchall())
+
+
+def count_jobs_by_user() -> Dict[int, int]:
+    """Return {user_id: job_count} for all users."""
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute("SELECT user_id, COUNT(*) AS cnt FROM jobs GROUP BY user_id")
+        rows = cur.fetchall()
+        return {_row(r)["user_id"]: _row(r)["cnt"] for r in rows}
+
+
+def list_runs_for_job(job_id: int) -> List[Dict]:
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"SELECT * FROM runs WHERE job_id = {ph} ORDER BY started_at DESC",
+            (job_id,),
+        )
+        return _rows(cur.fetchall())
+
+
+def list_all_active_runs() -> List[Dict]:
+    """Return all runs not in a terminal state, joined with user email and job name."""
+    ph = _ph()
+    terminal = ", ".join(f"{ph}" for _ in TERMINAL_STATES)
+    params = list(TERMINAL_STATES)
+    sql = (
+        f"SELECT r.*, j.job_name, u.email AS user_email "
+        f"FROM runs r "
+        f"JOIN jobs j ON r.job_id = j.id "
+        f"JOIN users u ON r.user_id = u.id "
+        f"WHERE r.actual_state NOT IN ({terminal}) "
+        f"ORDER BY r.started_at DESC"
+    )
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(sql, params)
+        return _rows(cur.fetchall())
+
+
+def force_delete_job_record(job_id: int) -> None:
+    """Delete a job and all its runs/artifacts by job_id (no user_id filter)."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(f"SELECT run_id FROM runs WHERE job_id = {ph}", (job_id,))
+        run_ids = [_row(r)["run_id"] for r in cur.fetchall()]
+        for rid in run_ids:
+            cur.execute(f"DELETE FROM artifacts WHERE run_id = {ph}", (rid,))
+        cur.execute(f"DELETE FROM runs WHERE job_id = {ph}", (job_id,))
+        cur.execute(f"DELETE FROM jobs WHERE id = {ph}", (job_id,))
+
+
+def delete_user_cascade(user_id: int) -> None:
+    """Delete a user and all their jobs, runs, artifacts."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"SELECT run_id FROM runs WHERE user_id = {ph}", (user_id,)
+        )
+        run_ids = [_row(r)["run_id"] for r in cur.fetchall()]
+        for rid in run_ids:
+            cur.execute(f"DELETE FROM artifacts WHERE run_id = {ph}", (rid,))
+        cur.execute(f"DELETE FROM runs WHERE user_id = {ph}", (user_id,))
+        cur.execute(f"DELETE FROM jobs WHERE user_id = {ph}", (user_id,))
+        cur.execute(f"DELETE FROM users WHERE id = {ph}", (user_id,))
+
+
+# ---------------------------------------------------------------------------
 # Postgres-specific helper
 # ---------------------------------------------------------------------------
 
