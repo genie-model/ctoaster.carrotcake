@@ -1001,23 +1001,23 @@ sequenceDiagram
     participant Runner as Runner Job Pod
     participant FS as Filestore
 
-    Browser->>API: POST /api/run-job {job_name}
+    Browser->>API: POST /api/run-job
     API->>FS: Verify job folder exists
-    API->>DB: upsert_job_record(); check no active run
-    API->>K8s: batch/v1 create Job (ctoaster-runner-<run_id[:12]>)
-    API->>DB: create_run(run_id, k8s_job_name, status=PENDING)
-    API-->>Browser: {run_id, k8s_job_name, message}
+    API->>DB: upsert_job_record, check no active run
+    API->>K8s: batch/v1 create Job ctoaster-runner-run_id
+    API->>DB: create_run with status PENDING
+    API-->>Browser: run_id, k8s_job_name, message
 
     K8s->>Runner: Schedule pod, inject env vars
-    Runner->>DB: update_run status=RUNNING
-    Runner->>FS: stage_job_to_workspace() → copy to /workspace
+    Runner->>DB: update_run status RUNNING
+    Runner->>FS: stage_job_to_workspace, copy to /workspace
     Runner->>Runner: Popen carrotcake.exe
     loop Every 2 seconds
-        Runner->>FS: sync_to_shared() workspace → Filestore
-        Runner->>DB: update heartbeat_at; check desired_state
+        Runner->>FS: sync_to_shared, workspace to Filestore
+        Runner->>DB: update heartbeat_at, check desired_state
     end
-    Runner->>FS: Final sync_to_shared()
-    Runner->>DB: update_run status=COMPLETE/FAILED/PAUSED
+    Runner->>FS: Final sync_to_shared
+    Runner->>DB: update_run status COMPLETE or FAILED or PAUSED
 ```
 
 
