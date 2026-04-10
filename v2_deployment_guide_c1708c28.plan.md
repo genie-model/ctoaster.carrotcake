@@ -15,6 +15,148 @@ isProject: false
 
 ---
 
+## 0. User Interface Guide
+
+ctoaster has three screens. Routing is based on login state and user role — there
+is no URL-based router; the React app renders exactly one screen at a time.
+
+### 0.1 Login / Register / System Admin
+
+The first screen every visitor sees. A centered card on a dark gradient background.
+
+- **Sign in** — enter email and password to log into an existing account.
+- **Create account** — toggle to "Register" mode. Same form; creates a new user
+  and logs in automatically.
+- **System Admin** — a small link at the bottom of the card. Clicking it switches
+  to "Admin Login" mode. Only designated admin emails (`pthak006@ucr.edu`,
+  `andy@seao2.org`) can proceed; anyone else sees "This account does not have
+  admin privileges." The admin login uses the same API endpoint as normal login
+  — the restriction is enforced both client-side (email allowlist) and
+  server-side (`require_admin` guard on every `/admin/*` endpoint).
+
+After successful authentication the user is taken to either the **Admin Page**
+(admin login) or the **Project Workspace** (normal login).
+
+### 0.2 System Admin Page
+
+A full-page dashboard available only to admin users.
+
+**Header bar** — "System Admin" title on the left, two buttons on the right:
+
+- **My Jobs** — exits admin mode and enters the normal Project Workspace for
+  this user's own jobs (without logging out).
+- **Logout** — clears the session and returns to the login screen.
+
+**Active Runs panel** — a table showing every currently running or queued science
+job across all users. Columns: User (email), Job (name), State (colour-coded
+pill: blue for running/queued, green for complete, amber for paused, red for
+failed), K8s Job (the Kubernetes Job object name), and Started (timestamp).
+Shows "No active runs" when idle.
+
+**Users panel** — a table of all registered users. Columns: ID, Email, Created
+date, Job count, and a **Delete User** button.
+
+- Clicking a user row **expands** it to show a nested sub-table of that user's
+  jobs with columns: Job Name, Filestore Path, Run State (or "idle" if no active
+  run), and a **Delete Job** button.
+- **Delete User** removes the user, all their jobs, all run records, kills any
+  active Kubernetes runner Jobs, and deletes the user's entire Filestore
+  directory. A confirmation dialog appears first.
+- **Delete Job** force-deletes a single job: kills any active K8s runner, removes
+  the Filestore folder, and deletes the DB records.
+
+A **Refresh** button reloads both panels.
+
+### 0.3 Project Workspace (main application)
+
+The primary working screen after a normal login. It has a left sidebar, a set of
+action icons, and a tabbed content area.
+
+#### Left sidebar — Job Tree
+
+Displays a collapsible tree with a root node **"My Jobs"**. Expanding it lists
+all jobs belonging to the logged-in user, sorted alphabetically. Clicking a job
+name selects it and loads its details into the content area. Collapsing "My Jobs"
+clears the selection. The tree refreshes automatically after adding, deleting, or
+running a job.
+
+#### Action icons (left palette)
+
+Four vertically stacked icons between the sidebar and the content area:
+
+| Icon | Colour | Action | When enabled |
+|------|--------|--------|--------------|
+| **+** (plus) | Green | **Add Job** — opens a modal asking for a job name; creates a new empty job on the Filestore | Always |
+| **X** (cross) | Red | **Remove Job** — opens a confirmation modal; deletes the selected job (auto-cancels stale runs, cleans up Filestore in background) | A job is selected |
+| **Play** | Green | **Run Job** — opens a confirmation modal; submits the job for execution as a Kubernetes Job pod | Job status is RUNNABLE, PAUSED, or RUNNING |
+| **Pause** | Grey | **Pause Job** — immediately sends a PAUSE signal (no modal); the runner writes a PAUSE command file that the Fortran model reads | Job status is RUNNING |
+
+#### Content tabs
+
+Five tabs across the top of the content area. Only one is visible at a time.
+
+**Status** — a read-only summary of the selected job:
+
+- Job Path (Filestore location)
+- Job Status (UNCONFIGURED, RUNNABLE, RUNNING, PAUSED, COMPLETE, FAILED)
+- Run Length (number of model years)
+- T100 (true/false flag for 100-year mode)
+- **Download Job Data (.zip)** button — enabled only when the job status is
+  COMPLETE. Downloads the entire job folder as a ZIP archive.
+
+The status auto-refreshes every 5 seconds while a job is selected (polled from
+the API by the parent component).
+
+**Setup** — configures the job before running:
+
+- **Base config** dropdown — selects a base model configuration.
+- **User config** dropdown — selects a user-level configuration overlay.
+- **Restart from** dropdown — pick a previously completed job to restart from.
+- **Run length** — number of model years to simulate.
+- **Modifications** — free-text field for additional configuration overrides.
+- **Save Changes** / **Configure Job** buttons — saves edits and writes the full
+  configuration to the Filestore, transitioning the job from UNCONFIGURED to
+  RUNNABLE.
+
+**Namelists** — browse and edit Fortran namelist files for the selected job:
+
+- **Namelist dropdown** — lists all `data_*` files in the job folder.
+- **Content area** — displays the selected namelist file content in a read-only
+  or editable text area.
+- **Save** button — writes changes back to the Filestore.
+
+**Output** — live-streaming log output from the running Fortran model:
+
+- On load, fetches the current `run.log` content via a REST call.
+- Then opens an **SSE (Server-Sent Events)** connection to
+  `/stream-output/{job_name}` which tails the log file in real time.
+- New lines appear as they are written by the model, with a 50ms throttle
+  for smooth rendering.
+- The output panel is cleared automatically when a job is deleted.
+
+**Plots** — interactive time-series visualisation of model output:
+
+- **Data File** dropdown — populated from the job's `output/biogem/` directory
+  (e.g., `biogem_series_misc_SLT.res`). Files appear once the model starts
+  producing output.
+- **Variable** dropdown — populated from the columns of the selected data file
+  (e.g., "mean (land) surface air temperature (degrees C)").
+- Selecting a file and variable loads an initial plot via a REST call, then
+  opens an **SSE stream** that appends new data points as the model runs. The
+  chart updates in real time.
+- **Recharts** line chart with adaptive X-axis ticks (time in years), grid,
+  tooltip, and legend.
+- **Export Plot** — saves the chart as a PDF (landscape A4) with title and
+  metadata.
+- **Export Data** — downloads the plotted data as a CSV file.
+
+#### Logout
+
+A **Logout** button in the top-right corner clears the session and returns to
+the login screen.
+
+---
+
 ## 1. Architecture Overview
 
 ```mermaid
