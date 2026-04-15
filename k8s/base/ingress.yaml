@@ -33,10 +33,16 @@ metadata:
     # Enable CORS at the Ingress level so both services share the same origin
     nginx.ingress.kubernetes.io/enable-cors: "true"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    # cert-manager will auto-provision a Let's Encrypt TLS certificate
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - ctoaster.org
+      secretName: ctoaster-org-tls
   rules:
-    - host: ""   # Leave empty to match any hostname / IP. Set to your domain if available.
+    - host: "ctoaster.org"
       http:
         paths:
           # API: /api/... → strips /api prefix and forwards to backend

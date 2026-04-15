@@ -396,14 +396,14 @@ Work through these steps in order. All commands run in Cloud Shell against your 
 ### Step 0 — Set shell variables (do this once per session)
 
 ```bash
-export PROJECT_ID="ctoaster-test-deploy"
+export PROJECT_ID="ucr-ursa-major-ridgwell-lab"
 export REGION="us-west2"
 export ZONE="us-west2-a"          # used for Filestore; must be a zone inside REGION
 export CLUSTER_NAME="cupcake-cluster"
 export REGISTRY="us-west2-docker.pkg.dev/${PROJECT_ID}/cupcake"
 export IMAGE_TAG="v2.0.0"         # increment per release
 export NAMESPACE="ctoaster"
-export CLOUDSQL_INSTANCE="ctoaster-test-deploy:us-west2:ctoaster-db"
+export CLOUDSQL_INSTANCE="ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db"
 ```
 
 ---
@@ -509,7 +509,7 @@ Note the **instance connection name**:
 
 ```bash
 gcloud sql instances describe ctoaster-db --format="value(connectionName)"
-# prints: ctoaster-test-deploy:us-west2:ctoaster-db
+# prints: ucr-ursa-major-ridgwell-lab:us-west2:ctoaster-db
 ```
 
 ---
@@ -565,7 +565,7 @@ gcloud filestore instances describe ctoaster-filestore \
   --format="value(networks[0].ipAddresses[0])"
 ```
 
-The Filestore IP is `10.184.99.242`. This has already been set in `[k8s/base/filestore-pvc.yaml](k8s/base/filestore-pvc.yaml)`.
+The Filestore IP is `10.236.81.178`. This has already been set in `[k8s/base/filestore-pvc.yaml](k8s/base/filestore-pvc.yaml)`.
 
 ---
 
@@ -606,7 +606,7 @@ kubectl -n ingress-nginx get svc ingress-nginx-controller --watch
 
 Note the `EXTERNAL-IP` — this is the public address for the whole application.
 
-# 34.118.227.11
+# 34.186.134.66
 
 ---
 

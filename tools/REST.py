@@ -320,14 +320,8 @@ def me(current_user=Depends(get_current_user)):
 def list_jobs(current_user=Depends(get_current_user)):
     try:
         user_id = int(current_user["id"])
-        user_root = get_user_root(user_id)
-        os.makedirs(user_root, exist_ok=True)
-
-        jobs = []
-        for name in os.listdir(user_root):
-            job_dir = os.path.join(user_root, name)
-            if os.path.isdir(job_dir):
-                jobs.append({"name": name, "path": job_dir})
+        rows = list_user_jobs(user_id)
+        jobs = [{"name": r["job_name"], "path": r.get("shared_path", "")} for r in rows]
         return {"jobs": jobs}
     except Exception as exc:
         return {"error": str(exc)}
