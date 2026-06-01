@@ -14,6 +14,8 @@ import sys
 import time
 from typing import Dict, Optional, Tuple
 
+import netCDF4 as nc
+
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTasks
@@ -1302,4 +1304,46 @@ async def get_plot_data_stream(
 
     # Return streaming response for real-time data
     return StreamingResponse(read_data_file(data_file_path, variable), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# 2D surface temperature snapshot
+# ---------------------------------------------------------------------------
+
+@app.get("/get-temp-snapshot/{job_name}")
+async def get_temp_snapshot(job_name: str, current_user=Depends(get_current_user)):
+    """
+    Read the latest biogem_temp_snapshot.nc written by the Fortran model and
+    return lon, lat, and the 2D surface temperature grid as JSON.
+    """
+    if ctoaster_jobs is None:
+        raise ValueError("ctoaster_jobs is not defined")
+
+    job_path = get_user_job_path(current_user, job_name)
+    if not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    ensure_job_owner(job_path, current_user)
+
+    # Locate the snapshot file inside output/biogem/
+    snapshot_path = None
+    for root, dirs, files in os.walk(job_path):
+        if "output/biogem" in root and "biogem_temp_snapshot.nc" in files:
+            snapshot_path = os.path.join(root, "biogem_temp_snapshot.nc")
+            break
+
+    if snapshot_path is None:
+        raise HTTPException(status_code=404, detail="Temperature snapshot not yet available")
+
+    try:
+        ds = nc.Dataset(snapshot_path, "r")
+        lon  = ds.variables["lon"][:].tolist()
+        lat  = ds.variables["lat"][:].tolist()
+        # netCDF4-python reads Fortran (lon, lat) as Python (lat, lon) — correct for Plotly heatmap
+        temp = ds.variables["ocn_T"][:, :].tolist()
+        ds.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading snapshot: {exc}")
+
+    return {"lon": lon, "lat": lat, "temp": temp}
 

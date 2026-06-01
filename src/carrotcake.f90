@@ -405,6 +405,9 @@ PROGRAM GENIE
                  CALL diag_biogem_timeseries_wrapper
               end if
 
+              ! *** BIOGEM surface temperature snapshot (2D live plot)
+              CALL biogem_temp_snapshot_wrapper
+
 #ifdef INTEL_PROFILE
                call itt_profile_end()
                call itt_profile_begin(task_cpl_flux_ocnatm_wrapper)
