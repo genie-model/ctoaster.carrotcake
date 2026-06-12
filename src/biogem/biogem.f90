@@ -3276,13 +3276,19 @@ CONTAINS
   ! ******************************************************************************************************************************** !
 
   ! ******************************************************************************************************************************** !
-  ! WRITE SURFACE TEMPERATURE SNAPSHOT TO NETCDF (every 5 model years)
+  ! WRITE SURFACE TEMPERATURE SNAPSHOT TO NETCDF (4x per model year, seasonal)
   SUBROUTINE biogem_save_temp_snapshot(dum_genie_clock)
     USE biogem_data_netCDF
     IMPLICIT NONE
     INTEGER(KIND=8), INTENT(IN) :: dum_genie_clock   ! genie clock (ms since start)
     ! -------------------------------------------------------- !
-    real    :: loc_t, loc_yr
+    ! NOTE: this routine is called every BIOGEM time-step (dozens per year).
+    ! We only write when the seasonal quarter-index changes, giving exactly
+    ! 4 instantaneous snapshots per model year. The quarter-index also serves
+    ! as the change token the frontend uses to re-render only on new frames.
+    real           :: loc_t, loc_yr
+    integer        :: loc_qtr
+    integer, save  :: loc_last_qtr = -huge(1)   ! persists across calls
     character(255) :: loc_filename
     ! -------------------------------------------------------- !
     ! compute model year (mirrors diag_biogem logic)
@@ -3292,10 +3298,13 @@ CONTAINS
     ELSE
        loc_yr = par_misc_t_end - loc_t
     END IF
-    ! write every 5 model years
-    IF (MOD(INT(ABS(loc_yr)), 5) == 0) THEN
+    ! seasonal quarter-index: 4 distinct values per model year
+    loc_qtr = INT(loc_yr * 4.0)
+    ! write only when we cross into a new season
+    IF (loc_qtr /= loc_last_qtr) THEN
+       loc_last_qtr = loc_qtr
        loc_filename = TRIM(par_outdir_name) // 'biogem_temp_snapshot.nc'
-       CALL sub_data_netCDF_temp_snapshot(loc_filename, loc_yr)
+       CALL sub_data_netCDF_temp_snapshot(loc_filename, loc_yr, loc_qtr)
     END IF
   END SUBROUTINE biogem_save_temp_snapshot
   ! ******************************************************************************************************************************** !

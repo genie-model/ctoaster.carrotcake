@@ -1341,9 +1341,15 @@ async def get_temp_snapshot(job_name: str, current_user=Depends(get_current_user
         lat  = ds.variables["lat"][:].tolist()
         # netCDF4-python reads Fortran (lon, lat) as Python (lat, lon) — correct for Plotly heatmap
         temp = ds.variables["ocn_T"][:, :].tolist()
+        # change token: the model's seasonal quarter-index written by Fortran.
+        # Frontend re-renders only when this changes. Fall back to -1 if absent.
+        try:
+            token = int(ds.getncattr("quarter_index"))
+        except (AttributeError, ValueError):
+            token = -1
         ds.close()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error reading snapshot: {exc}")
 
-    return {"lon": lon, "lat": lat, "temp": temp}
+    return {"token": token, "lon": lon, "lat": lat, "temp": temp}
 
