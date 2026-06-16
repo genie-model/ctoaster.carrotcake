@@ -99,6 +99,12 @@ def create_runner_job(
         client.V1EnvVar(name="FILESTORE_ROOT",      value=filestore_root),
         client.V1EnvVar(name="CTOASTER_JWT_SECRET", value=jwt_secret),
         client.V1EnvVar(name="WORKSPACE_ROOT",      value="/workspace"),
+        # Disable gfortran output buffering so the model's stdout (run.log) and
+        # its .res output files stream live instead of appearing in big delayed
+        # chunks. runner.py's Popen inherits the pod env, so the model picks
+        # these up automatically. PRECONNECTED → stdout/stderr; ALL → .res files.
+        client.V1EnvVar(name="GFORTRAN_UNBUFFERED_PRECONNECTED", value="1"),
+        client.V1EnvVar(name="GFORTRAN_UNBUFFERED_ALL",          value="1"),
     ]
 
     # Optional pass-through vars

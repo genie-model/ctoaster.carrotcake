@@ -341,6 +341,26 @@ def get_job_details(job_name: str, current_user=Depends(get_current_user)):
                 parts = read_status_file(job_path)
                 status = parts[0] if parts else "ERROR"
 
+        # Overlay the live run state from the DB. The status file is written by
+        # the model and synced from the runner pod, so it lags the actual run
+        # by ~20-30s at startup. The DB run row flips to RUNNING when the runner
+        # launches (~10s), so it gives the UI a prompt, flicker-free signal that
+        # the instance is spinning up (drives the Output panel's "spinning up"
+        # message). Only overlay while a run is active — once terminal the file
+        # status (COMPLETE / PAUSED / FAILED) is authoritative.
+        try:
+            job_rec = get_job_record(int(current_user["id"]), job_name)
+            if job_rec:
+                active = get_active_run_for_job(job_rec["id"])
+                if active:
+                    rs = active.get("actual_state") or "QUEUED"
+                    if rs in ("QUEUED", "RUNNING", "PAUSE_REQUESTED"):
+                        status = "RUNNING"
+                    elif rs == "PAUSED":
+                        status = "PAUSED"
+        except Exception as exc:
+            logger.warning(f"Could not overlay DB run state for {job_name}: {exc}")
+
         run_length = "n/a"
         t100 = False
         config_path = os.path.join(job_path, "config", "config")
