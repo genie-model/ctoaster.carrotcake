@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Runner image pre-pull DaemonSet
+#
+# Purpose: eliminate the cold-start image-pull delay for runner Jobs.
+# Each science run is a short-lived Job (tools/k8s_jobs.py) created with
+# imagePullPolicy=IfNotPresent. If the scheduling node has never pulled the
+# runner image, the pod blocks on a multi-hundred-MB pull before the model can
+# start — this is a large slice of the "logs appear late" lag.
+#
+# This DaemonSet runs one idle pod of the SAME runner image on every node, so
+# the image is always warm in each node's containerd cache. Runner Jobs then
+# start instantly (cache hit).
+#
+# IMPORTANT: the `image` tag below MUST match the RUNNER_IMAGE env on the
+# ctoaster-api deployment. When you bump RUNNER_IMAGE, bump this too:
+#   kubectl -n ctoaster set image ds/ctoaster-runner-prepull \
+#     prepull=us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:<new-tag>
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ctoaster-runner-prepull
+  namespace: ctoaster
+  labels:
+    app: ctoaster-runner-prepull
+spec:
+  selector:
+    matchLabels:
+      app: ctoaster-runner-prepull
+  template:
+    metadata:
+      labels:
+        app: ctoaster-runner-prepull
+    spec:
+      # Keep this off the critical path: low priority, tolerate everything so
+      # the image lands on every node, and never block node operations.
+      terminationGracePeriodSeconds: 5
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: prepull
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.2
+          imagePullPolicy: IfNotPresent
+          # Override the runner entrypoint — this pod only exists to warm the
+          # image cache, it must not try to execute a science run.
+          command: ["/bin/sh", "-c", "while true; do sleep 3600; done"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "128Mi"

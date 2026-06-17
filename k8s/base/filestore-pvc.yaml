@@ -35,6 +35,15 @@ spec:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   storageClassName: filestore-rwx
+  # NFS read tuning: default Linux NFS attribute caching can hold stale
+  # file size/mtime for up to acregmax=60s. The runner rewrites run.log on the
+  # Filestore every ~2s, but a stateless API pod reading it could see the old
+  # (empty/short) file for many seconds, then jump to the grown file — the
+  # "logs appear late, then at a far timestep" burst. actimeo=1 caps attribute
+  # revalidation at 1s so get-log reflects live progress. Applies on next mount
+  # (pods must be restarted to pick it up).
+  mountOptions:
+    - actimeo=1
   csi:
     driver: filestore.csi.storage.gke.io
     volumeHandle: "modeInstance/us-west2-a/ctoaster-filestore/ctoaster_data"
