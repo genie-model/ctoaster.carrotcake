@@ -130,12 +130,13 @@ def init_db() -> None:
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id     INTEGER NOT NULL REFERENCES users(id),
-                    job_name    TEXT NOT NULL,
-                    shared_path TEXT NOT NULL,
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL,
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       INTEGER NOT NULL REFERENCES users(id),
+                    job_name      TEXT NOT NULL,
+                    shared_path   TEXT NOT NULL,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL,
+                    ref_publish_id INTEGER,
                     UNIQUE(user_id, job_name)
                 )
             """)
@@ -168,6 +169,22 @@ def init_db() -> None:
                     created_at    TEXT NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS published_jobs (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_user_id INTEGER NOT NULL REFERENCES users(id),
+                    owner_email   TEXT NOT NULL,
+                    title         TEXT NOT NULL,
+                    description   TEXT,
+                    base_config   TEXT,
+                    stage         TEXT NOT NULL,
+                    stage_year    TEXT,
+                    run_length    TEXT,
+                    snapshot_path TEXT NOT NULL,
+                    size_bytes    INTEGER,
+                    created_at    TEXT NOT NULL
+                )
+            """)
         else:
             # Postgres
             cur.execute("""
@@ -181,12 +198,13 @@ def init_db() -> None:
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
-                    id          SERIAL PRIMARY KEY,
-                    user_id     INTEGER NOT NULL REFERENCES users(id),
-                    job_name    TEXT NOT NULL,
-                    shared_path TEXT NOT NULL,
-                    created_at  TIMESTAMPTZ NOT NULL,
-                    updated_at  TIMESTAMPTZ NOT NULL,
+                    id            SERIAL PRIMARY KEY,
+                    user_id       INTEGER NOT NULL REFERENCES users(id),
+                    job_name      TEXT NOT NULL,
+                    shared_path   TEXT NOT NULL,
+                    created_at    TIMESTAMPTZ NOT NULL,
+                    updated_at    TIMESTAMPTZ NOT NULL,
+                    ref_publish_id INTEGER,
                     UNIQUE (user_id, job_name)
                 )
             """)
@@ -219,6 +237,36 @@ def init_db() -> None:
                     created_at    TIMESTAMPTZ NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS published_jobs (
+                    id            SERIAL PRIMARY KEY,
+                    owner_user_id INTEGER NOT NULL REFERENCES users(id),
+                    owner_email   TEXT NOT NULL,
+                    title         TEXT NOT NULL,
+                    description   TEXT,
+                    base_config   TEXT,
+                    stage         TEXT NOT NULL,
+                    stage_year    TEXT,
+                    run_length    TEXT,
+                    snapshot_path TEXT NOT NULL,
+                    size_bytes    BIGINT,
+                    created_at    TIMESTAMPTZ NOT NULL
+                )
+            """)
+
+        # --- idempotent migration for pre-existing DBs (jobs.ref_publish_id) ---
+        _ensure_ref_publish_id_column(cur)
+
+
+def _ensure_ref_publish_id_column(cur) -> None:
+    """Add jobs.ref_publish_id to a pre-existing DB if missing (idempotent)."""
+    if _is_sqlite():
+        cur.execute("PRAGMA table_info(jobs)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "ref_publish_id" not in cols:
+            cur.execute("ALTER TABLE jobs ADD COLUMN ref_publish_id INTEGER")
+    else:
+        cur.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ref_publish_id INTEGER")
 
 
 # ---------------------------------------------------------------------------
@@ -308,9 +356,16 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
 # Job helpers
 # ---------------------------------------------------------------------------
 
-def create_job_record(user_id: int, job_name: str, shared_path: str) -> Dict:
+def create_job_record(
+    user_id: int,
+    job_name: str,
+    shared_path: str,
+    ref_publish_id: Optional[int] = None,
+) -> Dict:
     """
     Insert a jobs row. Raises ValueError if (user_id, job_name) already exists.
+    When ref_publish_id is set, the row is a read-only reference to a published
+    job (its shared_path points at the immutable published snapshot).
     Returns the created job dict.
     """
     ph = _ph()
@@ -325,10 +380,10 @@ def create_job_record(user_id: int, job_name: str, shared_path: str) -> Dict:
             raise ValueError(f"Job already exists: {job_name}")
         cur.execute(
             f"""
-            INSERT INTO jobs (user_id, job_name, shared_path, created_at, updated_at)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
+            INSERT INTO jobs (user_id, job_name, shared_path, created_at, updated_at, ref_publish_id)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             """,
-            (user_id, job_name, shared_path, now, now),
+            (user_id, job_name, shared_path, now, now, ref_publish_id),
         )
         row_id = cur.lastrowid if _is_sqlite() else _postgres_lastval(cur)
         return _row(_fetch_by_id(cur, "jobs", row_id))
@@ -389,6 +444,99 @@ def delete_job_record(user_id: int, job_name: str) -> None:
             f"DELETE FROM jobs WHERE user_id = {ph} AND job_name = {ph}",
             (user_id, job_name),
         )
+
+
+def get_job_by_id(job_id: int) -> Optional[Dict]:
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(f"SELECT * FROM jobs WHERE id = {ph}", (job_id,))
+        return _row(cur.fetchone())
+
+
+# ---------------------------------------------------------------------------
+# Published-jobs (shared restart) helpers
+# ---------------------------------------------------------------------------
+
+def create_published(
+    owner_user_id: int,
+    owner_email: str,
+    title: str,
+    description: str,
+    base_config: str,
+    stage: str,
+    stage_year: Optional[str],
+    run_length: Optional[str],
+    snapshot_path: str,
+    size_bytes: int,
+) -> Dict:
+    """Insert a published_jobs catalog row and return it."""
+    ph = _ph()
+    now = _now()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"""
+            INSERT INTO published_jobs
+                (owner_user_id, owner_email, title, description, base_config,
+                 stage, stage_year, run_length, snapshot_path, size_bytes, created_at)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """,
+            (owner_user_id, owner_email, title, description, base_config,
+             stage, stage_year, run_length, snapshot_path, size_bytes, now),
+        )
+        row_id = cur.lastrowid if _is_sqlite() else _postgres_lastval(cur)
+        return _row(_fetch_by_id(cur, "published_jobs", row_id))
+
+
+def set_published_snapshot(publish_id: int, snapshot_path: str, size_bytes: int) -> None:
+    """Record the snapshot location + size after the folder copy completes."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"UPDATE published_jobs SET snapshot_path = {ph}, size_bytes = {ph} WHERE id = {ph}",
+            (snapshot_path, size_bytes, publish_id),
+        )
+
+
+def get_published_by_id(publish_id: int) -> Optional[Dict]:
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(f"SELECT * FROM published_jobs WHERE id = {ph}", (publish_id,))
+        return _row(cur.fetchone())
+
+
+def list_published(filter_email: Optional[str] = None) -> List[Dict]:
+    """Return catalog entries, optionally filtered by (case-insensitive) email."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        if filter_email:
+            cur.execute(
+                f"SELECT * FROM published_jobs WHERE LOWER(owner_email) = {ph} "
+                f"ORDER BY created_at DESC",
+                (filter_email.strip().lower(),),
+            )
+        else:
+            cur.execute("SELECT * FROM published_jobs ORDER BY created_at DESC")
+        return _rows(cur.fetchall())
+
+
+def delete_published(publish_id: int, owner_user_id: int) -> bool:
+    """Delete a catalog row if owned by owner_user_id. Returns True if deleted."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"SELECT id FROM published_jobs WHERE id = {ph} AND owner_user_id = {ph}",
+            (publish_id, owner_user_id),
+        )
+        if not cur.fetchone():
+            return False
+        cur.execute(f"DELETE FROM published_jobs WHERE id = {ph}", (publish_id,))
+        return True
 
 
 # ---------------------------------------------------------------------------

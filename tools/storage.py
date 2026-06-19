@@ -151,6 +151,46 @@ def get_job_path(user_id: int, job_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Published-jobs (shared restart) storage helpers
+# ---------------------------------------------------------------------------
+
+def get_published_root() -> str:
+    """Root directory for immutable published-job snapshots on the Filestore."""
+    return os.path.join(get_filestore_root(), "PUBLISHED")
+
+
+def get_published_path(publish_id: int) -> str:
+    """Absolute path to a published snapshot (path-traversal guarded)."""
+    return safe_join(get_published_root(), str(int(publish_id)))
+
+
+def dir_size(path: str) -> int:
+    """Total size in bytes of all files under path."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def snapshot_job_to_published(src_job_path: str, publish_id: int) -> tuple:
+    """
+    Copy a whole job folder into the published area as an immutable snapshot.
+    Returns (dest_path, size_bytes). Overwrites any existing snapshot dir for
+    this publish_id (ids are unique, so this only matters on retry).
+    """
+    dest = get_published_path(publish_id)
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    os.makedirs(get_published_root(), exist_ok=True)
+    shutil.copytree(src_job_path, dest, copy_function=_copy_file)
+    return dest, dir_size(dest)
+
+
+# ---------------------------------------------------------------------------
 # Staging: Filestore → local workspace
 # ---------------------------------------------------------------------------
 

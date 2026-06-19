@@ -48,13 +48,17 @@ from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_ve
 # ── DB / storage / k8s imports ───────────────────────────────────────────────
 from tools.db import (
     count_jobs_by_user,
+    create_job_record,
     create_run,
     create_user,
     delete_job_record,
     delete_user_cascade,
     force_delete_job_record,
     get_active_run_for_job,
+    get_job_by_id,
     get_job_record,
+    get_latest_run_for_job,
+    get_published_by_id,
     get_run_by_id,
     get_user_by_email,
     get_user_by_id,
@@ -68,9 +72,11 @@ from tools.db import (
     verify_password,
 )
 from tools.k8s_jobs import create_runner_job, delete_runner_job, get_runner_job_status
+from tools import publish as publish_mod
 from tools.storage import (
     find_plot_data_path,
     get_job_path,
+    get_published_path,
     get_user_root,
     read_owner,
     safe_join,
@@ -237,6 +243,41 @@ def _ensure_owner(job_path: str, user: dict) -> None:
         raise HTTPException(status_code=403, detail="Job not owned by this user")
 
 
+def _job_ref_publish_id(user: dict, job_name: str):
+    """Return the published-job id a job references, or None if it's a normal
+    owned job (or has no DB record)."""
+    rec = get_job_record(int(user["id"]), job_name)
+    if rec:
+        return rec.get("ref_publish_id")
+    return None
+
+
+def _resolve_read_path(user: dict, job_name: str) -> str:
+    """
+    Resolve the on-disk path to read a job's data.
+
+    - Normal owned job: the user's job folder, with existence + ownership
+      enforced.
+    - Published reference (jobs.ref_publish_id set): the immutable published
+      snapshot folder, served read-only (ownership bypassed — the catalog is
+      public to all logged-in users). 404s with a clear message if the source
+      was unpublished.
+    """
+    ref_id = _job_ref_publish_id(user, job_name)
+    if ref_id:
+        entry = get_published_by_id(ref_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="This published job is no longer available")
+        path = get_published_path(ref_id)
+        if not os.path.isdir(path):
+            raise HTTPException(status_code=404, detail="This published job is no longer available")
+        return path
+    job_path = _job_path(user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, user)
+    return job_path
+
+
 # =============================================================================
 # Status file helper
 # =============================================================================
@@ -322,7 +363,18 @@ def list_jobs(current_user=Depends(get_current_user)):
     try:
         user_id = int(current_user["id"])
         rows = list_user_jobs(user_id)
-        jobs = [{"name": r["job_name"], "path": r.get("shared_path", "")} for r in rows]
+        jobs = []
+        for r in rows:
+            entry = {"name": r["job_name"], "path": r.get("shared_path", "")}
+            ref_id = r.get("ref_publish_id")
+            if ref_id:
+                pub = get_published_by_id(ref_id)
+                entry["published_ref"] = True
+                entry["published_by"] = pub["owner_email"] if pub else None
+                entry["published_title"] = pub["title"] if pub else None
+            else:
+                entry["published_ref"] = False
+            jobs.append(entry)
         return {"jobs": jobs}
     except Exception as exc:
         return {"error": str(exc)}
@@ -331,6 +383,25 @@ def list_jobs(current_user=Depends(get_current_user)):
 @app.get("/job/{job_name}")
 def get_job_details(job_name: str, current_user=Depends(get_current_user)):
     try:
+        # Published reference: report the published snapshot's frozen stage
+        # (read-only) and the run length recorded in the catalog.
+        ref_id = _job_ref_publish_id(current_user, job_name)
+        if ref_id:
+            entry = get_published_by_id(ref_id)
+            if not entry:
+                raise HTTPException(status_code=404, detail="This published job is no longer available")
+            return {"job": {
+                "name": job_name,
+                "path": get_published_path(ref_id),
+                "status": entry.get("stage", "COMPLETE"),
+                "run_length": entry.get("run_length") or "n/a",
+                "t100": "false",
+                "published_ref": True,
+                "publish_id": ref_id,
+                "published_by": entry.get("owner_email"),
+                "published_title": entry.get("title"),
+            }}
+
         job_path = _job_path(current_user, job_name)
         _ensure_job_exists(job_path, job_name)
 
@@ -432,6 +503,15 @@ async def add_job(request: Request, current_user=Depends(get_current_user)):
 
 @app.delete("/delete-job")
 def delete_job(job_name: str = Query(...), current_user=Depends(get_current_user)):
+    # Removing a published reference from the panel: just drop the DB row.
+    # The publisher's snapshot is untouched (it's not ours).
+    if _job_ref_publish_id(current_user, job_name):
+        try:
+            delete_job_record(int(current_user["id"]), job_name)
+        except Exception as exc:
+            logger.warning(f"DB delete failed for reference '{job_name}': {exc}")
+        return {"message": f"Removed '{job_name}' from your panel"}
+
     job_path = _job_path(current_user, job_name)
     _ensure_job_exists(job_path, job_name)
     _ensure_owner(job_path, current_user)
@@ -566,8 +646,8 @@ async def get_completed_jobs(current_user=Depends(get_current_user)):
 @app.get("/setup/{job_name}")
 def get_setup(job_name: str, current_user=Depends(get_current_user)):
     try:
-        job_path = _job_path(current_user, job_name)
-        _ensure_job_exists(job_path, job_name)
+        # Reference jobs read their config from the published snapshot.
+        job_path = _resolve_read_path(current_user, job_name)
 
         config_path = os.path.join(job_path, "config", "config")
         if not os.path.exists(config_path):
@@ -607,6 +687,8 @@ def get_setup(job_name: str, current_user=Depends(get_current_user)):
 @app.post("/setup/{job_name}")
 async def update_setup(job_name: str, request: Request, current_user=Depends(get_current_user)):
     try:
+        if _job_ref_publish_id(current_user, job_name):
+            raise HTTPException(status_code=400, detail="Published references are read-only; clone it to edit.")
         data = await request.json()
         job_path = _job_path(current_user, job_name)
         _ensure_job_exists(job_path, job_name)
@@ -688,6 +770,9 @@ async def run_job(request: Request, current_user=Depends(get_current_user)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    if _job_ref_publish_id(current_user, job_name):
+        raise HTTPException(status_code=400, detail="Published references can't be run directly — use 'Restart from' or clone it.")
+
     job_path = _job_path(current_user, job_name)
     _ensure_job_exists(job_path, job_name)
 
@@ -766,6 +851,9 @@ async def pause_job(request: Request, current_user=Depends(get_current_user)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    if _job_ref_publish_id(current_user, job_name):
+        raise HTTPException(status_code=400, detail="Published references can't be paused.")
+
     job_path = _job_path(current_user, job_name)
     _ensure_job_exists(job_path, job_name)
 
@@ -802,7 +890,7 @@ async def pause_job(request: Request, current_user=Depends(get_current_user)):
 
 @app.get("/get-log/{job_name}")
 async def get_log(job_name: str, current_user=Depends(get_current_user)):
-    job_path = _job_path(current_user, job_name)
+    job_path = _resolve_read_path(current_user, job_name)
     log_file_path = os.path.join(job_path, "run.log")
 
     if not os.path.exists(log_file_path):
@@ -888,9 +976,7 @@ def get_namelist_content(job_id: str, namelist_name: str, current_user=Depends(g
 
 @app.get("/get_data_files_list/{job_name}")
 async def get_data_files_list(job_name: str, current_user=Depends(get_current_user)):
-    job_path = _job_path(current_user, job_name)
-    _ensure_job_exists(job_path, job_name)
-    _ensure_owner(job_path, current_user)
+    job_path = _resolve_read_path(current_user, job_name)
 
     try:
         plot_data_path = find_plot_data_path(job_path)
@@ -912,9 +998,7 @@ async def get_data_files_list(job_name: str, current_user=Depends(get_current_us
 async def get_variables(
     job_name: str, data_file_name: str, current_user=Depends(get_current_user)
 ):
-    job_path = _job_path(current_user, job_name)
-    _ensure_job_exists(job_path, job_name)
-    _ensure_owner(job_path, current_user)
+    job_path = _resolve_read_path(current_user, job_name)
 
     try:
         plot_data_path = find_plot_data_path(job_path)
@@ -945,9 +1029,7 @@ class PlotDataRequest(BaseModel):
 
 @app.post("/get-plot-data")
 async def get_plot_data(request: PlotDataRequest, current_user=Depends(get_current_user)):
-    job_path = _job_path(current_user, request.job_name)
-    _ensure_job_exists(job_path, request.job_name)
-    _ensure_owner(job_path, current_user)
+    job_path = _resolve_read_path(current_user, request.job_name)
 
     try:
         plot_data_path = find_plot_data_path(job_path)
@@ -1074,9 +1156,7 @@ async def get_temp_snapshot(job_name: str, current_user=Depends(get_current_user
     The runner syncs the .nc to Filestore atomically (os.replace), so a read
     here never sees a half-written file.
     """
-    job_path = _job_path(current_user, job_name)
-    _ensure_job_exists(job_path, job_name)
-    _ensure_owner(job_path, current_user)
+    job_path = _resolve_read_path(current_user, job_name)
 
     try:
         plot_data_path = find_plot_data_path(job_path)
@@ -1121,9 +1201,7 @@ async def download_job_zip(
     background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
-    job_path = _job_path(current_user, job_name)
-    _ensure_job_exists(job_path, job_name)
-    _ensure_owner(job_path, current_user)
+    job_path = _resolve_read_path(current_user, job_name)
 
     tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
     zip_base = os.path.join(tmpdir, job_name)
@@ -1137,6 +1215,246 @@ async def download_job_zip(
         filename=f"{job_name}.zip",
         background=background_tasks,
     )
+
+
+# =============================================================================
+# Published jobs (cross-user shared restart)
+# =============================================================================
+
+_JOB_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _read_config_value(config_path: str, key: str) -> str:
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            for line in f:
+                if line.startswith(key + ":"):
+                    return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _derive_job_name(user_id: int, base: str) -> str:
+    """Sanitise `base` into a valid job name unique for this user."""
+    cleaned = "".join(ch if ch in _JOB_NAME_CHARS else "_" for ch in (base or ""))[:100]
+    cleaned = cleaned.strip("_") or "shared_job"
+    name = cleaned
+    i = 2
+    while get_job_record(user_id, name):
+        name = f"{cleaned}_{i}"
+        i += 1
+    return name
+
+
+class PublishRequest(BaseModel):
+    title: str
+    description: str = ""
+
+
+@app.post("/publish/{job_name}")
+async def publish_job_endpoint(
+    job_name: str, request: PublishRequest, current_user=Depends(get_current_user)
+):
+    if _job_ref_publish_id(current_user, job_name):
+        raise HTTPException(status_code=400, detail="You can only publish your own jobs, not references.")
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
+
+    stage = None
+    stage_year = None
+    if os.path.exists(os.path.join(job_path, "status")):
+        parts = read_status_file(job_path)
+        if parts:
+            stage = parts[0]
+            if len(parts) > 1 and parts[1].replace(".", "", 1).isdigit():
+                stage_year = parts[1]
+    if stage not in ("COMPLETE", "PAUSED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only COMPLETE or PAUSED jobs can be published (current: {stage or 'not run'}).",
+        )
+
+    config_path = os.path.join(job_path, "config", "config")
+    base_config = _read_config_value(config_path, "base_config")
+    run_length = _read_config_value(config_path, "run_length")
+
+    try:
+        entry = publish_mod.publish_job(
+            owner_user_id=int(current_user["id"]),
+            owner_email=current_user["email"],
+            job_path=job_path,
+            title=request.title,
+            description=request.description,
+            base_config=base_config,
+            stage=stage,
+            stage_year=stage_year,
+            run_length=run_length,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"message": f"Published '{job_name}'", "publish_id": entry["id"]}
+
+
+@app.delete("/publish/{publish_id}")
+def unpublish_endpoint(publish_id: int, current_user=Depends(get_current_user)):
+    ok = publish_mod.unpublish(int(publish_id), int(current_user["id"]))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Published job not found or not owned by you.")
+    return {"message": "Unpublished."}
+
+
+@app.get("/published")
+def list_published_endpoint(
+    email: Optional[str] = Query(None), current_user=Depends(get_current_user)
+):
+    out = []
+    for e in publish_mod.list_published(email):
+        out.append({
+            "id": e["id"],
+            "title": e["title"],
+            "description": e.get("description"),
+            "owner_email": e["owner_email"],
+            "base_config": e.get("base_config"),
+            "stage": e.get("stage"),
+            "stage_year": e.get("stage_year"),
+            "run_length": e.get("run_length"),
+            "size_bytes": e.get("size_bytes"),
+            "created_at": e.get("created_at"),
+        })
+    return {"published": out}
+
+
+@app.get("/published/{publish_id}")
+def get_published_endpoint(publish_id: int, current_user=Depends(get_current_user)):
+    e = publish_mod.get_published(int(publish_id))
+    if not e:
+        raise HTTPException(status_code=404, detail="Published job not found.")
+    e.pop("snapshot_path", None)
+    e.pop("owner_user_id", None)
+    return {"published": e}
+
+
+class AddRequest(BaseModel):
+    job_name: Optional[str] = None
+
+
+@app.post("/published/{publish_id}/add")
+def add_published(publish_id: int, request: AddRequest = None, current_user=Depends(get_current_user)):
+    e = publish_mod.get_published(int(publish_id))
+    if not e:
+        raise HTTPException(status_code=404, detail="Published job not found.")
+    uid = int(current_user["id"])
+    desired = (request.job_name if request and request.job_name else e["title"])
+    name = _derive_job_name(uid, desired)
+    snapshot_path = get_published_path(int(publish_id))
+    create_job_record(uid, name, snapshot_path, ref_publish_id=int(publish_id))
+    return {"message": f"Added '{name}' to your panel", "job_name": name}
+
+
+@app.post("/published/{publish_id}/clone")
+def clone_published(publish_id: int, request: AddRequest = None, current_user=Depends(get_current_user)):
+    e = publish_mod.get_published(int(publish_id))
+    if not e:
+        raise HTTPException(status_code=404, detail="Published job not found.")
+    uid = int(current_user["id"])
+    snapshot_path = get_published_path(int(publish_id))
+    if not os.path.isdir(snapshot_path):
+        raise HTTPException(status_code=404, detail="This published job is no longer available.")
+    name = _derive_job_name(uid, (request.job_name if request and request.job_name else e["title"]))
+    dest = _job_path(current_user, name)
+    if os.path.exists(dest):
+        raise HTTPException(status_code=400, detail="A job with that name already exists.")
+    shutil.copytree(snapshot_path, dest)
+    write_owner(dest, uid, current_user["email"])
+    try:
+        upsert_job_record(uid, name, dest)
+    except Exception as exc:
+        logger.warning(f"DB upsert failed for clone '{name}': {exc}")
+    return {"message": f"Cloned to '{name}'", "job_name": name}
+
+
+class RestartRequest(BaseModel):
+    job_name: Optional[str] = None
+    run_length: int
+    user_config: Optional[str] = None
+    modifications: Optional[str] = ""
+
+
+@app.post("/published/{publish_id}/restart")
+def restart_from_published(publish_id: int, request: RestartRequest, current_user=Depends(get_current_user)):
+    e = publish_mod.get_published(int(publish_id))
+    if not e:
+        raise HTTPException(status_code=404, detail="Published job not found.")
+    uid = int(current_user["id"])
+    snapshot_path = get_published_path(int(publish_id))
+    if not os.path.isdir(snapshot_path):
+        raise HTTPException(status_code=404, detail="This published job is no longer available.")
+
+    # base_config is inherited + locked from the source; user_config defaults to
+    # the source's unless the recipient overrides it. The restart files come from
+    # the snapshot's output/ tree (new-job.py accepts an absolute --restart path).
+    src_config = os.path.join(snapshot_path, "config", "config")
+    base_config = e.get("base_config") or _read_config_value(src_config, "base_config")
+    user_config = request.user_config or _read_config_value(src_config, "user_config")
+    if not base_config:
+        raise HTTPException(status_code=400, detail="Source base_config unknown; cannot restart.")
+    restart_path = os.path.join(snapshot_path, "output")
+
+    name = _derive_job_name(uid, request.job_name or f"{e['title']}_restart")
+    job_dir = _job_path(current_user, name)
+    if os.path.exists(job_dir):
+        raise HTTPException(status_code=400, detail="A job with that name already exists.")
+
+    try:
+        os.makedirs(os.path.join(job_dir, "config"))
+        config_path = os.path.join(job_dir, "config", "config")
+        with open(config_path, "w") as f:
+            f.write(f"base_config_dir: {os.path.join(ctoaster_data, 'base-configs')}\n")
+            f.write(f"base_config: {base_config}\n")
+            if user_config:
+                f.write(f"user_config_dir: {os.path.join(ctoaster_data, 'user-configs')}\n")
+                f.write(f"user_config: {user_config}\n")
+            f.write(f"restart: {restart_path}\n")
+            f.write(f"config_date: {datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"run_length: {request.run_length}\n")
+
+        mods_path = os.path.join(job_dir, "config", "config_mods")
+        if request.modifications:
+            with open(mods_path, "w") as f:
+                f.write(request.modifications)
+
+        write_owner(job_dir, uid, current_user["email"])
+        try:
+            upsert_job_record(uid, name, job_dir)
+        except Exception as exc:
+            logger.warning(f"DB upsert failed for restart job '{name}': {exc}")
+
+        user_jobs_root = get_user_root(uid)
+        os.makedirs(user_jobs_root, exist_ok=True)
+        new_job_script = os.path.join(ctoaster_root, "tools", "new-job.py")
+        cmd = [
+            sys.executable, new_job_script, "--gui",
+            "-b", base_config,
+            "-u", user_config,
+            "-j", user_jobs_root,
+            name, str(request.run_length),
+            "--restart", restart_path,
+        ]
+        if request.modifications:
+            cmd.extend(["-m", mods_path])
+        res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
+        if not res.startswith("OK"):
+            raise ValueError(res[4:] if len(res) > 4 else res)
+    except sp.CalledProcessError as exc:
+        _bg_remove_dir(job_dir)
+        raise HTTPException(status_code=500, detail=f"new-job script failed: {exc.output}")
+    except Exception as exc:
+        _bg_remove_dir(job_dir)
+        raise HTTPException(status_code=500, detail=f"Could not create restart job: {exc}")
+
+    return {"message": f"Created restart job '{name}'", "job_name": name}
 
 
 # =============================================================================
