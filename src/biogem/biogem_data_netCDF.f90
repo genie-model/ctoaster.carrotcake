@@ -144,6 +144,97 @@ CONTAINS
 
 
   ! ****************************************************************************************************************************** !
+  ! SAVE SURFACE TEMPERATURE SNAPSHOT (2D, overwritten each call)
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_data_netCDF_temp_snapshot(dum_name, dum_yr, dum_qtr)
+    ! -------------------------------------------------------- !
+    ! DUMMY ARGUMENTS
+    ! -------------------------------------------------------- !
+    character(LEN=*), INTENT(IN) :: dum_name   ! final output file path
+    REAL,             INTENT(IN) :: dum_yr     ! current model year
+    INTEGER,          INTENT(IN) :: dum_qtr    ! quarter-index change token
+    ! -------------------------------------------------------- !
+    ! DEFINE LOCAL VARIABLES
+    ! -------------------------------------------------------- !
+    integer :: loc_ntrec, loc_iou
+    integer :: loc_id_lonm, loc_id_latm
+    integer :: loc_rename_stat
+    integer, dimension(1:2) :: loc_it_1
+    integer, dimension(1:3) :: loc_it_2
+    character(127) :: loc_title, loc_timunit
+    character(8)   :: loc_string_year
+    character(32)  :: loc_qtr_str
+    character(255) :: loc_name_tmp
+    real :: loc_c0, loc_c1
+    real, dimension(n_i, n_j) :: loc_ij, loc_ij_mask
+    ! -------------------------------------------------------- !
+    ! INITIALIZE LOCAL VARIABLES
+    ! -------------------------------------------------------- !
+    loc_c0 = 0.0 ; loc_c1 = 1.0
+    loc_ij = 0.0 ; loc_ij_mask = 0.0
+    ! write to a temporary file first, then atomically rename, so that a
+    ! concurrent reader (REST endpoint) never sees a partially-written file
+    loc_name_tmp = TRIM(dum_name) // '.tmp'
+    ! -------------------------------------------------------- !
+    ! WRITE TO FILE
+    ! -------------------------------------------------------- !
+    ! open temporary file (overwrites if exists)
+    call sub_opennew(loc_name_tmp, loc_iou)
+    call sub_redef(loc_iou)
+    ! set global attributes
+    loc_string_year = fun_conv_num_char_n(8, int(dum_yr))
+    loc_title   = 'BIOGEM surface temperature snapshot @ year ' // loc_string_year
+    loc_timunit = 'Year'
+    call sub_putglobal(loc_iou, dum_name, loc_title, string_ncrunid, loc_timunit)
+    ! write the quarter-index change token as a global attribute so the
+    ! frontend can re-render only when a genuinely new frame is written
+    write(loc_qtr_str, '(I0)') dum_qtr
+    call sub_putatttext('global', loc_iou, 'quarter_index', trim(loc_qtr_str))
+    ! define dimensions
+    call sub_defdim('lon', loc_iou, n_i, loc_id_lonm)
+    call sub_defdim('lat', loc_iou, n_j, loc_id_latm)
+    ! define 1-D axis variables
+    loc_it_1(1) = loc_id_lonm
+    call sub_defvar('lon', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'X', 'D', &
+         & 'longitude of the t grid', 'longitude', 'degrees_east')
+    loc_it_1(1) = loc_id_latm
+    call sub_defvar('lat', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'Y', 'D', &
+         & 'latitude of the t grid', 'latitude', 'degrees_north')
+    ! define 2-D temperature variable
+    loc_it_2(1) = loc_id_lonm
+    loc_it_2(2) = loc_id_latm
+    call sub_defvar('ocn_T', loc_iou, 2, loc_it_2, loc_c0, loc_c0, ' ', 'F', &
+         & 'Ocean surface temperature', 'ocean_temperature', 'degrees_C')
+    call sub_enddef(loc_iou)
+    call sub_sync(loc_iou)
+    ! -------------------------------------------------------- !
+    loc_ntrec = 1
+    ! write axis data
+    call sub_putvar1d('lon', loc_iou, n_i, loc_ntrec, n_i, &
+         & phys_ocn(ipo_lon, :, 1, n_k), loc_c1, loc_c0)
+    call sub_putvar1d('lat', loc_iou, n_j, loc_ntrec, n_j, &
+         & phys_ocn(ipo_lat, 1, :, n_k), loc_c1, loc_c0)
+    ! write surface temperature with ocean mask
+    ! NOTE: ocn(io_T) is stored in Kelvin; convert to degrees Celsius to match
+    ! the variable's 'degrees_C' units attribute (masked cells overwritten below)
+    loc_ij_mask(:, :) = phys_ocn(ipo_mask_ocn, :, :, n_k)
+    loc_ij(:, :)      = ocn(io_T, :, :, n_k) - const_zeroC
+    call sub_putvar2d('ocn_T', loc_iou, n_i, n_j, loc_ntrec, &
+         & loc_ij(:, :), loc_ij_mask(:, :))
+    ! close the temporary file (flushes to disk)
+    call sub_closefile(loc_iou)
+    ! atomically replace the live file (POSIX rename within the same dir)
+    call rename(trim(loc_name_tmp), trim(dum_name), loc_rename_stat)
+    if (loc_rename_stat /= 0) then
+       print *, 'WARNING: temp snapshot rename failed, status =', loc_rename_stat
+    end if
+    ! -------------------------------------------------------- !
+    ! END
+    ! -------------------------------------------------------- !
+  END SUBROUTINE sub_data_netCDF_temp_snapshot
+  ! ****************************************************************************************************************************** !
+
+  ! ****************************************************************************************************************************** !
   ! INITIALIZE netCDF
   SUBROUTINE sub_init_netcdf(dum_name,dum_iou,dum_dd)
     !-----------------------------------------------------------------------

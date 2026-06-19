@@ -341,6 +341,12 @@ CONTAINS
     CALL biogem_climate_sol(go_solfor, go_fxsw, genie_solar_constant)
   END SUBROUTINE biogem_climate_sol_wrapper
 
+  SUBROUTINE biogem_temp_snapshot_wrapper
+    USE biogem
+    IMPLICIT NONE
+    CALL biogem_save_temp_snapshot(genie_clock)
+  END SUBROUTINE biogem_temp_snapshot_wrapper
+
   SUBROUTINE diag_biogem_wrapper
     USE biogem
     IMPLICIT NONE

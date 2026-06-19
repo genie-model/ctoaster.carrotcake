@@ -39,7 +39,7 @@ spec:
         - operator: Exists
       containers:
         - name: prepull
-          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.2
+          image: us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.3
           imagePullPolicy: IfNotPresent
           # Override the runner entrypoint — this pod only exists to warm the
           # image cache, it must not try to execute a science run.

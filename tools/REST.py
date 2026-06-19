@@ -30,6 +30,7 @@ import time
 import uuid
 from typing import Dict, Generator, Optional
 
+import netCDF4 as nc
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1056,6 +1057,58 @@ async def get_plot_data_stream(
         _read_data_file_sse(data_file_path, variable),
         media_type="text/event-stream",
     )
+
+
+# =============================================================================
+# 2D surface temperature snapshot (live heatmap)
+# =============================================================================
+
+@app.get("/get-temp-snapshot/{job_name}")
+async def get_temp_snapshot(job_name: str, current_user=Depends(get_current_user)):
+    """
+    Read the latest biogem_temp_snapshot.nc the Fortran model writes (4x per
+    model year) and return lon, lat, the 2D surface-temperature grid (°C), and
+    a change token (the model's seasonal quarter-index) so the frontend can
+    re-render only when a genuinely new frame appears.
+
+    The runner syncs the .nc to Filestore atomically (os.replace), so a read
+    here never sees a half-written file.
+    """
+    job_path = _job_path(current_user, job_name)
+    _ensure_job_exists(job_path, job_name)
+    _ensure_owner(job_path, current_user)
+
+    try:
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    snapshot_path = os.path.join(plot_data_path, "biogem_temp_snapshot.nc")
+    if not os.path.isfile(snapshot_path):
+        raise HTTPException(
+            status_code=404, detail="Temperature snapshot not yet available"
+        )
+
+    try:
+        ds = nc.Dataset(snapshot_path, "r")
+        try:
+            lon = ds.variables["lon"][:].tolist()
+            lat = ds.variables["lat"][:].tolist()
+            # netCDF4-python reads Fortran (lon, lat) as (lat, lon) — correct
+            # orientation for the Plotly heatmap. Masked land cells become None.
+            temp = ds.variables["ocn_T"][:, :].tolist()
+            try:
+                token = int(ds.getncattr("quarter_index"))
+            except (AttributeError, ValueError):
+                token = -1
+        finally:
+            ds.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading snapshot: {exc}")
+
+    return {"token": token, "lon": lon, "lat": lat, "temp": temp}
 
 
 # =============================================================================

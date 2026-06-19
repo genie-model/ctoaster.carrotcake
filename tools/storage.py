@@ -229,9 +229,26 @@ def sync_to_shared(
         src = os.path.join(workspace_job_path, name)
         dst = os.path.join(shared_job_path, name)
         if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=_copy_file)
         else:
-            shutil.copy2(src, dst)
+            _copy_file(src, dst)
+
+
+def _copy_file(src: str, dst: str) -> None:
+    """
+    Copy a single file workspace → Filestore.
+
+    Binary outputs (NetCDF) must never be visible half-written to a concurrent
+    reader (e.g. the API serving the 2D temperature snapshot via nc.Dataset).
+    For those we copy to a temp name on the same NFS dir and os.replace() it
+    atomically. Plain shutil.copy2 is fine for everything else.
+    """
+    if src.endswith(".nc"):
+        tmp = dst + ".synctmp"
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)  # atomic within the same directory
+    else:
+        shutil.copy2(src, dst)
 
 
 # ---------------------------------------------------------------------------
