@@ -130,7 +130,14 @@ def create_runner_job(
             ),
         ],
         resources=client.V1ResourceRequirements(
-            requests={"cpu": "200m", "memory": "256Mi"},
+            # 300m request caps the scheduler at 2 runners per e2-medium node
+            # (~680m allocatable for pods after system overhead; 680/300 -> 2).
+            # The node has 2 physical vCPUs and the model is single-threaded and
+            # bursts to the 2000m limit, so 2 runners => ~1 vCPU each = full
+            # speed with no 3-way CPU thrashing (the old 200m request let 3 pack
+            # onto a 2-core node). 30 concurrent runs -> ~15 nodes (within the
+            # autoscaler max), with the cluster autoscaler adding nodes on demand.
+            requests={"cpu": "300m", "memory": "256Mi"},
             limits={"cpu": "2000m", "memory": "4Gi"},
         ),
     )
