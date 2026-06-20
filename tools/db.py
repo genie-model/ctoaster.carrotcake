@@ -185,6 +185,15 @@ def init_db() -> None:
                     created_at    TEXT NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_users (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email         TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt          TEXT NOT NULL,
+                    created_at    TEXT NOT NULL
+                )
+            """)
         else:
             # Postgres
             cur.execute("""
@@ -250,6 +259,15 @@ def init_db() -> None:
                     run_length    TEXT,
                     snapshot_path TEXT NOT NULL,
                     size_bytes    BIGINT,
+                    created_at    TIMESTAMPTZ NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_users (
+                    id            SERIAL PRIMARY KEY,
+                    email         TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt          TEXT NOT NULL,
                     created_at    TIMESTAMPTZ NOT NULL
                 )
             """)
@@ -350,6 +368,97 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
             (user_id,),
         )
         return _row(cur.fetchone())
+
+
+# ---------------------------------------------------------------------------
+# Registration requests (admin-approved sign-up)
+# ---------------------------------------------------------------------------
+
+def create_registration_request(email: str, password: str) -> Dict:
+    """
+    Record a pending sign-up. The password is hashed immediately (same pbkdf2
+    as real users) so it is reused verbatim on approval. Raises ValueError if
+    the email is already a user or already has a pending request.
+    Returns the public pending row (id, email, created_at).
+    """
+    ph = _ph()
+    email = email.strip().lower()
+    salt, pw_hash = hash_password(password)
+    now = _now()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(f"SELECT id FROM users WHERE email = {ph}", (email,))
+        if cur.fetchone():
+            raise ValueError(f"An account already exists for {email}")
+        cur.execute(f"SELECT id FROM pending_users WHERE email = {ph}", (email,))
+        if cur.fetchone():
+            raise ValueError(f"A registration request is already pending for {email}")
+        cur.execute(
+            f"""
+            INSERT INTO pending_users (email, password_hash, salt, created_at)
+            VALUES ({ph}, {ph}, {ph}, {ph})
+            """,
+            (email, pw_hash, salt, now),
+        )
+        row_id = cur.lastrowid if _is_sqlite() else _postgres_lastval(cur)
+        row = _fetch_by_id(cur, "pending_users", row_id)
+    return {"id": row["id"], "email": row["email"], "created_at": row["created_at"]}
+
+
+def list_registration_requests() -> List[Dict]:
+    """Return pending sign-up requests (no password material)."""
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute("SELECT id, email, created_at FROM pending_users ORDER BY created_at ASC")
+        return _rows(cur.fetchall())
+
+
+def approve_registration_request(request_id: int) -> Optional[Dict]:
+    """
+    Turn a pending request into a real user (reusing the stored hash/salt so the
+    registrant's original password works), then delete the pending row.
+    Returns the created public user dict, or None if the request is gone.
+    Raises ValueError if a user with that email now exists.
+    """
+    ph = _ph()
+    now = _now()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"SELECT id, email, password_hash, salt FROM pending_users WHERE id = {ph}",
+            (request_id,),
+        )
+        req = _row(cur.fetchone())
+        if not req:
+            return None
+        cur.execute(f"SELECT id FROM users WHERE email = {ph}", (req["email"],))
+        if cur.fetchone():
+            # Clean up the now-redundant request and report the conflict.
+            cur.execute(f"DELETE FROM pending_users WHERE id = {ph}", (request_id,))
+            raise ValueError(f"An account already exists for {req['email']}")
+        cur.execute(
+            f"""
+            INSERT INTO users (email, password_hash, salt, created_at)
+            VALUES ({ph}, {ph}, {ph}, {ph})
+            """,
+            (req["email"], req["password_hash"], req["salt"], now),
+        )
+        row_id = cur.lastrowid if _is_sqlite() else _postgres_lastval(cur)
+        user = _fetch_by_id(cur, "users", row_id)
+        cur.execute(f"DELETE FROM pending_users WHERE id = {ph}", (request_id,))
+    return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}
+
+
+def reject_registration_request(request_id: int) -> bool:
+    """Delete a pending request. Returns True if a row was removed."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(f"SELECT id FROM pending_users WHERE id = {ph}", (request_id,))
+        if not cur.fetchone():
+            return False
+        cur.execute(f"DELETE FROM pending_users WHERE id = {ph}", (request_id,))
+        return True
 
 
 # ---------------------------------------------------------------------------

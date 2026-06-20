@@ -47,11 +47,15 @@ from tools.utils import ctoaster_data, ctoaster_jobs, ctoaster_root, ctoaster_ve
 
 # ── DB / storage / k8s imports ───────────────────────────────────────────────
 from tools.db import (
+    approve_registration_request,
     count_jobs_by_user,
     create_job_record,
+    create_registration_request,
     create_run,
     create_user,
     delete_job_record,
+    list_registration_requests,
+    reject_registration_request,
     delete_user_cascade,
     force_delete_job_record,
     get_active_run_for_job,
@@ -327,12 +331,18 @@ async def register(request: Request):
     password = data.get("password", "")
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
+    # Sign-up is admin-approved: record a pending request instead of creating
+    # the account. No token is issued — the user can log in only after an admin
+    # approves the request (which creates the account with these credentials).
     try:
-        user = create_user(email, password)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="User already exists")
-    token = generate_token(user["id"], user["email"])
-    return {"user": user, "token": token}
+        create_registration_request(email, password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "pending",
+        "message": "Registration request submitted. An admin must approve your "
+                   "account before you can log in.",
+    }
 
 
 @app.post("/auth/login")
@@ -1468,6 +1478,29 @@ def admin_list_users(admin=Depends(require_admin)):
     for u in users:
         u["job_count"] = job_counts.get(u["id"], 0)
     return {"users": users}
+
+
+@app.get("/admin/registration-requests")
+def admin_list_registration_requests(admin=Depends(require_admin)):
+    return {"requests": list_registration_requests()}
+
+
+@app.post("/admin/registration-requests/{request_id}/approve")
+def admin_approve_registration(request_id: int, admin=Depends(require_admin)):
+    try:
+        user = approve_registration_request(int(request_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not user:
+        raise HTTPException(status_code=404, detail="Registration request not found.")
+    return {"message": f"Approved {user['email']}.", "user": user}
+
+
+@app.post("/admin/registration-requests/{request_id}/reject")
+def admin_reject_registration(request_id: int, admin=Depends(require_admin)):
+    if not reject_registration_request(int(request_id)):
+        raise HTTPException(status_code=404, detail="Registration request not found.")
+    return {"message": "Registration request rejected."}
 
 
 @app.get("/admin/users/{user_id}/jobs")
