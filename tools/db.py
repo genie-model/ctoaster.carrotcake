@@ -834,8 +834,20 @@ def force_delete_job_record(job_id: int) -> None:
         cur.execute(f"DELETE FROM jobs WHERE id = {ph}", (job_id,))
 
 
+def list_published_by_owner(owner_user_id: int) -> List[Dict]:
+    """Return a user's published catalog rows (used to clean up on deletion)."""
+    ph = _ph()
+    with _conn() as con:
+        cur = _cursor(con)
+        cur.execute(
+            f"SELECT * FROM published_jobs WHERE owner_user_id = {ph}",
+            (owner_user_id,),
+        )
+        return _rows(cur.fetchall())
+
+
 def delete_user_cascade(user_id: int) -> None:
-    """Delete a user and all their jobs, runs, artifacts."""
+    """Delete a user and all their jobs, runs, artifacts, and published rows."""
     ph = _ph()
     with _conn() as con:
         cur = _cursor(con)
@@ -847,6 +859,9 @@ def delete_user_cascade(user_id: int) -> None:
             cur.execute(f"DELETE FROM artifacts WHERE run_id = {ph}", (rid,))
         cur.execute(f"DELETE FROM runs WHERE user_id = {ph}", (user_id,))
         cur.execute(f"DELETE FROM jobs WHERE user_id = {ph}", (user_id,))
+        # Published rows FK-reference users(id); remove them or the user delete
+        # is blocked by the foreign key.
+        cur.execute(f"DELETE FROM published_jobs WHERE owner_user_id = {ph}", (user_id,))
         cur.execute(f"DELETE FROM users WHERE id = {ph}", (user_id,))
 
 

@@ -70,6 +70,7 @@ from tools.db import (
     init_db,
     list_all_active_runs,
     list_all_users,
+    list_published_by_owner,
     list_user_jobs,
     update_run,
     upsert_job_record,
@@ -1577,6 +1578,14 @@ def admin_delete_user(user_id: int, admin=Depends(require_admin)):
     user_root = get_user_root(user_id)
     if os.path.isdir(user_root):
         _bg_remove_dir(user_root)
+
+    # Remove this user's published snapshots from Filestore so no orphaned data
+    # is left behind (the DB rows are removed by delete_user_cascade).
+    for pub in list_published_by_owner(user_id):
+        try:
+            shutil.rmtree(get_published_path(pub["id"]), ignore_errors=True)
+        except Exception as exc:
+            logger.warning(f"Could not remove published snapshot {pub['id']}: {exc}")
 
     delete_user_cascade(user_id)
     logger.info(f"Admin deleted user {user_id} ({user['email']})")
