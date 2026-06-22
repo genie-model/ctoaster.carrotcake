@@ -643,6 +643,23 @@ async def get_completed_jobs(current_user=Depends(get_current_user)):
                 parts = read_status_file(job_dir)
                 if parts and parts[0] == "COMPLETE":
                     completed.append(job_name)
+
+        # Also offer added published references as restart sources. They aren't
+        # real folders under user_root (they point at an immutable published
+        # snapshot), so scan the DB. A COMPLETE or PAUSED snapshot has a usable
+        # restart set. This is what makes a published 10k-year run selectable in
+        # the "Restart From" dropdown of a new job.
+        try:
+            for rec in list_user_jobs(int(current_user["id"])):
+                ref_id = rec.get("ref_publish_id")
+                if not ref_id:
+                    continue
+                pub = get_published_by_id(ref_id)
+                if pub and pub.get("stage") in ("COMPLETE", "PAUSED") and rec["job_name"] not in completed:
+                    completed.append(rec["job_name"])
+        except Exception as exc:
+            logger.warning(f"Could not add published references to completed-jobs: {exc}")
+
         return {"completed_jobs": completed}
     except Exception as exc:
         logger.error(f"Error fetching completed jobs: {exc}")
@@ -748,7 +765,19 @@ async def update_setup(job_name: str, request: Request, current_user=Depends(get
         if modifications:
             cmd.extend(["-m", mods_path])
         if restart:
-            cmd.extend(["--restart", restart])
+            # The "Restart From" value is a job name. If it names an added
+            # published reference, the restart files live in that published
+            # snapshot's output/ (there is no local folder for a reference), so
+            # pass new-job.py the absolute snapshot path; otherwise pass the
+            # name (new-job.py resolves it under the user's jobs root).
+            restart_arg = restart
+            ref_rec = get_job_record(int(current_user["id"]), restart)
+            if ref_rec and ref_rec.get("ref_publish_id"):
+                pub = get_published_by_id(ref_rec["ref_publish_id"])
+                if not pub:
+                    raise HTTPException(status_code=400, detail="The published restart source is no longer available.")
+                restart_arg = os.path.join(get_published_path(ref_rec["ref_publish_id"]), "output")
+            cmd.extend(["--restart", restart_arg])
 
         try:
             res = sp.check_output(cmd, stderr=sp.STDOUT, text=True).strip()
