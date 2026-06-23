@@ -45,8 +45,13 @@ defs = [f"-DREV={rev}"]
 # Environment setup.
 envcopy = os.environ.copy()
 baselinkflags = f90.get("baselinkflags", [])
-extraf90flags = f90.get(build_type, [])
-extralinkflags = f90.get(f"{build_type}_link", [])
+# Default (non-debug) builds use the platform's optimised "ship" flags (-O3
+# etc.). Previously build_type "normal" had no entry in the platform dict, so
+# f90.get("normal", []) returned [] and the model compiled at -O0 — ~3-5x
+# slower. Falling back to "ship" keeps the optimisation for production builds
+# (the runner exe) while an explicit "debug" build still uses the debug flags.
+extraf90flags = f90.get(build_type) or f90.get("ship", [])
+extralinkflags = f90.get(f"{build_type}_link", []) or f90.get("ship_link", [])
 extraf90libpaths = [f90["libpath"]] if "libpath" in f90 else []
 extraf90libs = [f90["libs"]] if "libs" in f90 else []
 

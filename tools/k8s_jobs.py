@@ -130,21 +130,29 @@ def create_runner_job(
             ),
         ],
         resources=client.V1ResourceRequirements(
-            # 300m request caps the scheduler at 2 runners per e2-medium node
-            # (~680m allocatable for pods after system overhead; 680/300 -> 2).
-            # The node has 2 physical vCPUs and the model is single-threaded and
-            # bursts to the 2000m limit, so 2 runners => ~1 vCPU each = full
-            # speed with no 3-way CPU thrashing (the old 200m request let 3 pack
-            # onto a 2-core node). 30 concurrent runs -> ~15 nodes (within the
-            # autoscaler max), with the cluster autoscaler adding nodes on demand.
-            requests={"cpu": "300m", "memory": "256Mi"},
-            limits={"cpu": "2000m", "memory": "4Gi"},
+            # Each run gets one dedicated vCPU. Runners are pinned (nodeSelector
+            # below) to the n2-standard-4 "runner" pool, whose dedicated cores
+            # avoid the e2-medium shared-core burst-throttling that made long
+            # runs slow down over time. 1000m request => ~3 runs per 4-vCPU node
+            # with no contention; the cluster autoscaler adds nodes on demand.
+            requests={"cpu": "1000m", "memory": "512Mi"},
+            limits={"cpu": "3500m", "memory": "8Gi"},
         ),
     )
 
     pod_spec = client.V1PodSpec(
         restart_policy="Never",
         containers=[container],
+        # Pin runners to the dedicated-vCPU runner pool (labelled + tainted
+        # workload=runner) so the single-threaded model runs on a full, un-
+        # throttled core, isolated from the API/frontend (which stay on the
+        # cheaper e2-medium pool).
+        node_selector={"workload": "runner"},
+        tolerations=[
+            client.V1Toleration(
+                key="workload", operator="Equal", value="runner", effect="NoSchedule",
+            ),
+        ],
         volumes=[
             client.V1Volume(
                 name="filestore",
