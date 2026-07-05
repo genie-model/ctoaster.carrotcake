@@ -16,8 +16,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Generator, List, Optional
@@ -110,6 +112,37 @@ def _fetch_by_id(cur, table: str, row_id: int) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 # Schema initialisation
 # ---------------------------------------------------------------------------
+
+def wait_for_db(max_wait_seconds: float = 90.0, interval: float = 2.0) -> None:
+    """
+    Block until the database accepts a connection, retrying with a fixed
+    interval up to max_wait_seconds.
+
+    The API pod's Cloud SQL proxy sidecar can take a few seconds to start
+    listening. Without this, the import-time init_db() below hits
+    'connection refused' on a fresh pod and the whole app crashes — under an
+    HPA scale-up (i.e. exactly when load arrives) every new pod crash-loops
+    instead of coming up. Waiting for the proxy makes startup reliable.
+    """
+    log = logging.getLogger("ctoaster.db")
+    deadline = time.monotonic() + max_wait_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with _conn() as con:
+                cur = _cursor(con)
+                cur.execute("SELECT 1")
+            if attempt > 1:
+                log.info(f"Database ready after {attempt} attempts.")
+            return
+        except Exception as exc:
+            if time.monotonic() >= deadline:
+                log.error(f"Database still unreachable after {max_wait_seconds}s; giving up.")
+                raise
+            log.warning(f"Database not ready (attempt {attempt}): {exc}; retrying in {interval}s")
+            time.sleep(interval)
+
 
 def init_db() -> None:
     """Create all tables if they do not exist. Safe to call on every startup."""

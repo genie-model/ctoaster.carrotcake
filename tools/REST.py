@@ -75,6 +75,7 @@ from tools.db import (
     update_run,
     upsert_job_record,
     verify_password,
+    wait_for_db,
 )
 from tools.k8s_jobs import create_runner_job, delete_runner_job, get_runner_job_status
 from tools import publish as publish_mod
@@ -129,6 +130,10 @@ ADMIN_EMAILS = set(
 )
 
 # ── initialise DB on startup ──────────────────────────────────────────────────
+# Wait for the Cloud SQL proxy sidecar to be ready before touching the DB, so a
+# fresh pod (e.g. during an HPA scale-up under load) doesn't crash-loop on a
+# 'connection refused' race. Then create/migrate tables.
+wait_for_db()
 init_db()
 
 

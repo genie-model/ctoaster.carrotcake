@@ -74,6 +74,16 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
+          # Startup can wait up to ~90s for the Cloud SQL proxy sidecar (see
+          # wait_for_db in db.py). The startupProbe holds off liveness/readiness
+          # until the app is actually serving, so a slow start under load is not
+          # mistaken for a crash and killed.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 30   # up to ~150s to come up
           livenessProbe:
             httpGet:
               path: /healthz
