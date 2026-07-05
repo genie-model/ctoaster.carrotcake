@@ -19,6 +19,7 @@ import hmac
 import logging
 import os
 import secrets
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -45,6 +46,36 @@ def _sqlite_path() -> str:
 # Connection context manager
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Postgres connection pool
+#
+# Previously every DB operation opened a fresh psycopg2 connection and closed
+# it. Under load (a class of ~25 all polling several endpoints every 2s + many
+# runners heartbeating) that produced a storm of short-lived connections that
+# overwhelmed the small Cloud SQL tier and caused intermittent failures. A
+# per-process pool reuses a bounded set of connections instead. A semaphore
+# gates concurrent checkouts to the pool size, so callers beyond the limit wait
+# (backpressure) rather than erroring — and the DB never sees more than
+# DB_POOL_MAX connections per pod.
+# ---------------------------------------------------------------------------
+
+_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "6"))
+_pg_pool = None
+_pg_sema: Optional[threading.Semaphore] = None
+_pool_lock = threading.Lock()
+
+
+def _get_pg_pool():
+    global _pg_pool, _pg_sema
+    if _pg_pool is None:
+        with _pool_lock:
+            if _pg_pool is None:
+                from psycopg2.pool import ThreadedConnectionPool
+                _pg_sema = threading.Semaphore(_POOL_MAX)
+                _pg_pool = ThreadedConnectionPool(1, _POOL_MAX, DB_URL)
+    return _pg_pool, _pg_sema
+
+
 @contextmanager
 def _conn() -> Generator:
     if _is_sqlite():
@@ -63,17 +94,26 @@ def _conn() -> Generator:
         finally:
             con.close()
     else:
-        import psycopg2
-        import psycopg2.extras
-        con = psycopg2.connect(DB_URL)
+        pool, sema = _get_pg_pool()
+        sema.acquire()          # blocks past _POOL_MAX concurrent users (backpressure)
+        con = None
         try:
-            yield con
-            con.commit()
-        except Exception:
-            con.rollback()
-            raise
+            con = pool.getconn()
+            try:
+                yield con
+                con.commit()
+            except Exception:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                # Return the connection to the pool; discard it if it went bad
+                # (e.g. the server dropped it) so we never hand out a dead one.
+                pool.putconn(con, close=(con.closed != 0))
         finally:
-            con.close()
+            sema.release()
 
 
 def _cursor(con):
