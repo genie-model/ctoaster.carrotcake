@@ -91,8 +91,11 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
+            # DB-aware: a pod that can't reach the database is marked NotReady
+            # and removed from the Service (stops getting traffic) rather than
+            # serving errors. Liveness stays on /healthz so the pod isn't killed.
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5

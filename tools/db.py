@@ -184,6 +184,16 @@ def wait_for_db(max_wait_seconds: float = 90.0, interval: float = 2.0) -> None:
             time.sleep(interval)
 
 
+def ping() -> None:
+    """
+    Single fast connectivity check (SELECT 1) — raises if the DB is unreachable.
+    Used by the /readyz readiness probe so a pod that can't reach the DB is
+    pulled out of service instead of serving errors.
+    """
+    with _conn() as con:
+        _cursor(con).execute("SELECT 1")
+
+
 def init_db() -> None:
     """Create all tables if they do not exist. Safe to call on every startup."""
     ph = _ph()

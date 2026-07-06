@@ -72,6 +72,7 @@ from tools.db import (
     list_all_users,
     list_published_by_owner,
     list_user_jobs,
+    ping as db_ping,
     update_run,
     upsert_job_record,
     verify_password,
@@ -318,6 +319,21 @@ def read_status_file(job_dir: str) -> Optional[list]:
 
 @app.get("/healthz")
 def healthz():
+    # Liveness: is the process alive? Deliberately does NOT touch the DB — a DB
+    # blip must not cause kubelet to kill (and crash-loop) otherwise-fine pods.
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz():
+    # Readiness: can this pod actually serve? A quick DB check, so a pod that
+    # can't reach the database is pulled out of the Service (stops receiving
+    # traffic) instead of returning errors to users.
+    try:
+        db_ping()
+    except Exception as exc:
+        logger.warning(f"readiness check failed: {exc}")
+        raise HTTPException(status_code=503, detail="database not ready")
     return {"ok": True}
 
 
