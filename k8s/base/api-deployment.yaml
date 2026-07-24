@@ -64,6 +64,11 @@ spec:
               value: "us-west2-docker.pkg.dev/ucr-ursa-major-ridgwell-lab/cupcake/ctoaster-backend:v2.0.0"
             - name: K8S_NAMESPACE
               value: "ctoaster"
+            # Per-pod Postgres connection pool size. Keep pods(HPA max) x this
+            # under Cloud SQL max_connections(100): 15 x 4 = 60, leaving room
+            # for the runners.
+            - name: DB_POOL_MAX
+              value: "4"
           volumeMounts:
             - name: filestore-volume
               mountPath: /ctoaster-filestore
@@ -99,6 +104,11 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
+            # Patience: a busy-but-healthy pod under a CPU spike gets 5s (not 1s)
+            # to answer before being pulled from the Service, so concurrent job
+            # setups don't flap pods out and cause transient 503s.
+            timeoutSeconds: 5
+            failureThreshold: 3
 
         # -----------------------------------------------------------------------
         # Cloud SQL Auth Proxy sidecar

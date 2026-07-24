@@ -71,4 +71,4 @@ cgenie-msvs/x64/Release
 
 
 # Exclude the bash script I have created for testing 
-run_sequence.sh
+run_sequence.sh.claude/

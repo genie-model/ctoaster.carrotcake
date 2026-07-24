@@ -8,15 +8,20 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: ctoaster-api
-  minReplicas: 2
-  maxReplicas: 10
+  # min 8 keeps enough warm servers that a class-sized spike doesn't start from
+  # too few (avoids the concurrent-setup CPU crunch that caused transient 503s).
+  # max 15 x DB_POOL_MAX(4) = 60 stays under Cloud SQL max_connections(100) with
+  # room for the runners. Scale-up is eager (45% target, no delay) so
+  # reinforcements arrive during a spike, not after.
+  minReplicas: 8
+  maxReplicas: 15
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          averageUtilization: 45
     - type: Resource
       resource:
         name: memory
@@ -28,4 +33,4 @@ spec:
       # Avoid thrashing — wait 5 minutes of sustained low load before scaling down
       stabilizationWindowSeconds: 300
     scaleUp:
-      stabilizationWindowSeconds: 30
+      stabilizationWindowSeconds: 0
