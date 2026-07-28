@@ -490,6 +490,11 @@ CONTAINS
           ncout3dsig_ntrec = 0
        end if
     ENDIF
+    ! zero-filled 3D fields snapshot: exists from run start so the frontend can read
+    ! variable names + axes to build its 2D-plot dropdowns before any data is produced.
+    ! year = -1 marks it as "not a real frame"; annual means overwrite it as the run
+    ! progresses (sub_fields_snapshot_update) and end_biogem flushes the final year.
+    call sub_data_netCDF_fields_snapshot(TRIM(par_outdir_name)//'biogem_fields_snapshot.nc', -1, .TRUE.)
 
     ! *** load restart information ***
     IF (ctrl_continuing .OR. gui_restart) then
@@ -3181,6 +3186,10 @@ CONTAINS
     WRITE(unit=out,fmt='(i6)') ncout2d_ntrec,ncout3d_ntrec
     close(unit=out)
 
+    ! flush the final (partial) year of the live 2D-fields snapshot so the last
+    ! year is never skipped (annual-mean feature)
+    call sub_fields_snapshot_finalize(TRIM(par_outdir_name)//'biogem_fields_snapshot.nc')
+
     ! ---------------------------------------------------------- !
     !  DEALLOCATE ARRAYS
     !- --------------------------------------------------------- !
@@ -3306,6 +3315,11 @@ CONTAINS
        loc_filename = TRIM(par_outdir_name) // 'biogem_temp_snapshot.nc'
        CALL sub_data_netCDF_temp_snapshot(loc_filename, loc_yr, loc_qtr)
     END IF
+    ! 3D fields snapshot for the general 2D-plot feature: accumulate every time-step
+    ! and publish an annual mean at each year boundary (avoids the seasonal
+    ! under-sampling / aliasing Andy flagged); the final year is flushed in end_biogem.
+    loc_filename = TRIM(par_outdir_name) // 'biogem_fields_snapshot.nc'
+    CALL sub_fields_snapshot_update(loc_filename, loc_yr)
   END SUBROUTINE biogem_save_temp_snapshot
   ! ******************************************************************************************************************************** !
 
