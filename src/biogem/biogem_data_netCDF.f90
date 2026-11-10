@@ -25,6 +25,15 @@ MODULE biogem_data_netCDF
   real, allocatable :: fields_snap_accum(:,:,:,:)   ! running sum of ocn over the current year
   integer :: fields_snap_count = 0                  ! samples accumulated in the current year
   integer :: fields_snap_year  = -HUGE(1)           ! current year bucket; -HUGE => not started
+  ! ---- History frames for the time slider ------------------------------------ !
+  ! Besides the live snapshot, every fields_snap_stride-th completed year (and the
+  ! final year) is also written to fields_frames/fields_<year>.nc and never
+  ! rewritten. The stride keeps a job to <= fields_snap_max_frames frames however
+  ! long it runs (runs <= 200 yr keep every year).
+  integer, parameter :: fields_snap_max_frames = 200
+  integer :: fields_snap_stride     = 1             ! write a frame every stride-th year
+  integer :: fields_snap_first_year = -HUGE(1)      ! first year bucket; stride is counted from it
+  character(len=255) :: fields_snap_frames_dir = '' ! '<outdir>fields_frames/'; '' => frames off
 
 
 CONTAINS
@@ -322,6 +331,12 @@ CONTAINS
     ! The init file writes -1 so the frontend waits for the first real annual frame.
     write(loc_year_str, '(I0)') dum_year
     call sub_putatttext('global', loc_iou, 'year', trim(loc_year_str))
+    ! explicit init marker, so real model years may be negative (e.g. -1)
+    if (dum_is_init) then
+       call sub_putatttext('global', loc_iou, 'init', '1')
+    else
+       call sub_putatttext('global', loc_iou, 'init', '0')
+    end if
     ! dimensions: time (unlimited, so sub_putvar3d_g can index a record), lon, lat, zt
     call sub_defdim('time', loc_iou, const_integer_zero, loc_id_time)
     call sub_defdim('lon',  loc_iou, n_i, loc_id_lonm)
@@ -412,11 +427,54 @@ CONTAINS
 
 
   ! ****************************************************************************************************************************** !
+  ! SET UP THE FIELDS SNAPSHOT + HISTORY FRAMES AT MODEL INIT
+  !
+  ! Writes the zero-filled live snapshot (metadata for the frontend's menus before
+  ! any data exists), chooses the history-frame stride from the run length so a
+  ! job keeps <= fields_snap_max_frames frames, and creates fields_frames/.
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_fields_snapshot_init(dum_outdir, dum_runtime)
+    character(LEN=*), INTENT(IN) :: dum_outdir   ! biogem output dir (with trailing '/')
+    REAL,             INTENT(IN) :: dum_runtime  ! run length (years)
+    integer :: loc_stat
+    fields_snap_stride = MAX(1, CEILING(dum_runtime / REAL(fields_snap_max_frames)))
+    fields_snap_frames_dir = TRIM(dum_outdir) // 'fields_frames/'
+    call execute_command_line('mkdir -p ' // TRIM(fields_snap_frames_dir), exitstat=loc_stat)
+    if (loc_stat /= 0) then
+       print *, 'WARNING: could not create ', TRIM(fields_snap_frames_dir), &
+            & '; 2D-field history frames disabled'
+       fields_snap_frames_dir = ''
+    end if
+    call sub_data_netCDF_fields_snapshot(TRIM(dum_outdir)//'biogem_fields_snapshot.nc', -1, .TRUE.)
+  END SUBROUTINE sub_fields_snapshot_init
+  ! ****************************************************************************************************************************** !
+
+
+  ! ****************************************************************************************************************************** !
+  ! PUBLISH ONE COMPLETED YEAR: live snapshot always, history frame if on stride
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_fields_snapshot_publish(dum_name, dum_year, dum_force_frame)
+    character(LEN=*), INTENT(IN) :: dum_name         ! live snapshot path
+    INTEGER,          INTENT(IN) :: dum_year         ! completed year being published
+    LOGICAL,          INTENT(IN) :: dum_force_frame  ! .true. => frame regardless of stride (final year)
+    character(len=32) :: loc_year_str
+    call sub_data_netCDF_fields_snapshot(dum_name, dum_year, .FALSE.)
+    if (LEN_TRIM(fields_snap_frames_dir) == 0) return
+    if (dum_force_frame .OR. (MOD(dum_year - fields_snap_first_year, fields_snap_stride) == 0)) then
+       write(loc_year_str, '(I0)') dum_year
+       call sub_data_netCDF_fields_snapshot( &
+            & TRIM(fields_snap_frames_dir)//'fields_'//TRIM(loc_year_str)//'.nc', dum_year, .FALSE.)
+    end if
+  END SUBROUTINE sub_fields_snapshot_publish
+  ! ****************************************************************************************************************************** !
+
+
+  ! ****************************************************************************************************************************** !
   ! ACCUMULATE + PUBLISH THE ANNUAL-MEAN FIELDS SNAPSHOT
   !
   ! Called every BIOGEM time-step. Sums the live ocn() array into a year buffer;
   ! when the integer model year advances, publishes the just-completed year's mean
-  ! (via sub_data_netCDF_fields_snapshot) and resets the buffer for the new year.
+  ! (live snapshot, plus a history frame on the stride) and resets the buffer.
   ! ****************************************************************************************************************************** !
   SUBROUTINE sub_fields_snapshot_update(dum_name, dum_yr)
     character(LEN=*), INTENT(IN) :: dum_name   ! output file path
@@ -431,10 +489,11 @@ CONTAINS
     loc_yr_idx = INT(dum_yr)
     if (fields_snap_year == -HUGE(1)) then
        fields_snap_year = loc_yr_idx                       ! first call: open the first year's bucket
+       fields_snap_first_year = loc_yr_idx                 ! history-frame stride counts from here
     else if (loc_yr_idx /= fields_snap_year) then
        ! year rolled over: publish the completed year's annual mean, then reset
        if (fields_snap_count > 0) &
-            & call sub_data_netCDF_fields_snapshot(dum_name, fields_snap_year, .FALSE.)
+            & call sub_fields_snapshot_publish(dum_name, fields_snap_year, .FALSE.)
        fields_snap_accum = 0.0
        fields_snap_count = 0
        fields_snap_year  = loc_yr_idx
@@ -456,7 +515,8 @@ CONTAINS
   SUBROUTINE sub_fields_snapshot_finalize(dum_name)
     character(LEN=*), INTENT(IN) :: dum_name   ! output file path
     if (allocated(fields_snap_accum) .AND. (fields_snap_count > 0)) then
-       call sub_data_netCDF_fields_snapshot(dum_name, fields_snap_year, .FALSE.)
+       ! final year always gets a history frame so the slider reaches the end
+       call sub_fields_snapshot_publish(dum_name, fields_snap_year, .TRUE.)
        fields_snap_count = 0
     end if
   END SUBROUTINE sub_fields_snapshot_finalize

@@ -26,7 +26,12 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import zipfile
 from typing import FrozenSet, Optional
+
+# Per-year 2D-field history frames written by the model under output/biogem/.
+# Excluded from job downloads and published snapshots.
+HISTORY_FRAMES_DIR = "fields_frames"
 
 # ---------------------------------------------------------------------------
 # Root resolution
@@ -186,8 +191,26 @@ def snapshot_job_to_published(src_job_path: str, publish_id: int) -> tuple:
     if os.path.isdir(dest):
         shutil.rmtree(dest)
     os.makedirs(get_published_root(), exist_ok=True)
-    shutil.copytree(src_job_path, dest, copy_function=_copy_file)
+    # History frames are a viewing aid, not needed to restart from a snapshot.
+    shutil.copytree(src_job_path, dest, copy_function=_copy_file,
+                    ignore=shutil.ignore_patterns(HISTORY_FRAMES_DIR))
     return dest, dir_size(dest)
+
+
+def zip_job(job_path: str, zip_base: str) -> str:
+    """
+    Zip a job folder for download, excluding the 2D-field history frames (a
+    viewing aid that would bloat the archive). Returns the archive path
+    (zip_base + ".zip").
+    """
+    archive = zip_base + ".zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, dirnames, filenames in os.walk(job_path):
+            dirnames[:] = [d for d in dirnames if d != HISTORY_FRAMES_DIR]
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                zf.write(full, os.path.relpath(full, job_path))
+    return archive
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +299,38 @@ def sync_to_shared(
 
 def _copy_file(src: str, dst: str) -> None:
     """
-    Copy a single file workspace → Filestore.
+    Copy a single file workspace → Filestore, skipping it if unchanged.
 
+    The runner syncs every few seconds; re-copying every output each time
+    (including large netCDF files and the per-year 2D-field history frames)
+    would load Filestore for nothing.
+    """
+    if _is_unchanged(src, dst):
+        return
+    _copy_bytes(src, dst)
+
+
+def _is_unchanged(src: str, dst: str) -> bool:
+    """
+    True if dst already holds src's content: same size and same mtime.
+
+    mtime is compared at microsecond precision because the live fields snapshot
+    is rewritten at the same size, sometimes several times a second; a
+    seconds-only check could skip the final write for good. copy2 preserves
+    mtimes, so a file we copied matches exactly. If the destination filesystem
+    keeps coarser timestamps the check simply fails and we copy (safe).
+    """
+    try:
+        s, d = os.stat(src), os.stat(dst)
+    except FileNotFoundError:
+        return False
+    return s.st_size == d.st_size and s.st_mtime_ns // 1000 == d.st_mtime_ns // 1000
+
+
+def _copy_bytes(src: str, dst: str) -> None:
+    """
     Binary outputs (NetCDF) must never be visible half-written to a concurrent
-    reader (e.g. the API serving the 2D temperature snapshot via nc.Dataset).
+    reader (e.g. the API serving the 2D field snapshots via nc.Dataset).
     For those we copy to a temp name on the same NFS dir and os.replace() it
     atomically. Plain shutil.copy2 is fine for everything else.
     """

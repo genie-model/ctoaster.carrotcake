@@ -79,6 +79,7 @@ from tools.db import (
     wait_for_db,
 )
 from tools.k8s_jobs import create_runner_job, delete_runner_job, get_runner_job_status
+from tools import fields_frames
 from tools import publish as publish_mod
 from tools.storage import (
     find_plot_data_path,
@@ -90,6 +91,7 @@ from tools.storage import (
     sync_to_shared,
     validate_job_name,
     write_owner,
+    zip_job,
 )
 
 # ── app setup ─────────────────────────────────────────────────────────────────
@@ -1351,42 +1353,81 @@ async def get_fields_meta(job_name: str, current_user=Depends(get_current_user))
     }
 
 
+def _fields_out_dir(current_user, job_name) -> str:
+    """The job's output/biogem directory, or 404."""
+    job_path = _resolve_read_path(current_user, job_name)
+    try:
+        return find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/get-field-frames/{job_name}")
+async def get_field_frames(job_name: str, current_user=Depends(get_current_user)):
+    """
+    Years available for the 2D-field time slider: every history frame plus the
+    live year. {"years": [...], "live_year": int | null}. Jobs from before the
+    history feature return just the live year.
+    """
+    out_dir = _fields_out_dir(current_user, job_name)
+    try:
+        return fields_frames.list_years(out_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error listing frames: {exc}")
+
+
 @app.get("/get-field-snapshot/{job_name}/{var_name}")
 async def get_field_snapshot(
-    job_name: str, var_name: str, current_user=Depends(get_current_user)
+    job_name: str,
+    var_name: str,
+    year: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
 ):
     """
-    The full array for a single variable plus the change token. For a 3D
-    variable this is depth x lat x lon (surface-first depth order); for a 2D
-    variable it is lat x lon. Masked land / below-seafloor cells are null. The
-    frontend does all depth-level / latitude slicing on this array client-side,
-    so switching slices needs no extra request.
+    The full array for one variable in one year (default: the live year), plus
+    that year. For a 3D variable values are depth x lat x lon (surface first);
+    for a 2D variable lat x lon. Masked land / below-seafloor cells are null.
+    The frontend slices depth / latitude client-side, so switching slices needs
+    no extra request. 404 until the first annual frame exists.
     """
-    ds = _open_fields_snapshot(current_user, job_name)
+    out_dir = _fields_out_dir(current_user, job_name)
     try:
-        if var_name not in ds.variables or not _is_field_var(ds, var_name):
-            raise HTTPException(
-                status_code=404, detail=f"Unknown field variable: {var_name}"
-            )
-        var = ds.variables[var_name]
-        is3d = "zt" in var.dimensions
-        # Drop the leading unit-length time axis. netCDF4 returns Fortran
-        # (lon,lat,zt,time) as (time,zt,lat,lon); (lon,lat,time) as (time,lat,lon).
-        # .tolist() turns masked (land / sub-seafloor) cells into None.
-        values = var[0].tolist()
-        token = _snapshot_token(ds)
-    except HTTPException:
-        raise
+        field = fields_frames.read_field(out_dir, var_name, year)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Error reading field '{var_name}': {exc}"
         )
-    finally:
-        ds.close()
+    # token == the frame's model year (kept for older frontends)
+    return {"token": field["year"], "name": var_name, **field}
 
-    # token == the model year of this annual-mean frame; the frontend uses it both
-    # to detect a new frame and to show the "Year: xxx" label.
-    return {"token": token, "year": token, "name": var_name, "is3d": is3d, "values": values}
+
+@app.get("/get-field-range/{job_name}/{var_name}")
+async def get_field_range(
+    job_name: str,
+    var_name: str,
+    slice: str = Query(..., pattern="^(horizontal|vertical|zonal)$"),
+    index: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """
+    {"min", "max"} of one slice of a variable across every available year, for
+    the Fixed colour scale (a colour means the same value in every year).
+    index = depth level (horizontal) or latitude row (vertical); unused for zonal.
+    """
+    out_dir = _fields_out_dir(current_user, job_name)
+    try:
+        rng = fields_frames.slice_range(out_dir, var_name, slice, index)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, IndexError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error computing range: {exc}")
+    if rng is None:
+        raise HTTPException(status_code=404, detail="No data yet")
+    return {"min": rng[0], "max": rng[1]}
 
 
 # =============================================================================
@@ -1403,7 +1444,7 @@ async def download_job_zip(
 
     tmpdir = tempfile.mkdtemp(prefix=f"{job_name}_zip_")
     zip_base = os.path.join(tmpdir, job_name)
-    archive_path = shutil.make_archive(zip_base, "zip", job_path)
+    archive_path = zip_job(job_path, zip_base)  # excludes 2D-field history frames
 
     background_tasks.add_task(shutil.rmtree, tmpdir, True)
 

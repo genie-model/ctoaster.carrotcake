@@ -494,7 +494,8 @@ CONTAINS
     ! variable names + axes to build its 2D-plot dropdowns before any data is produced.
     ! year = -1 marks it as "not a real frame"; annual means overwrite it as the run
     ! progresses (sub_fields_snapshot_update) and end_biogem flushes the final year.
-    call sub_data_netCDF_fields_snapshot(TRIM(par_outdir_name)//'biogem_fields_snapshot.nc', -1, .TRUE.)
+    ! Also sets the history-frame stride from the run length and creates fields_frames/.
+    call sub_fields_snapshot_init(TRIM(par_outdir_name), par_misc_t_runtime)
 
     ! *** load restart information ***
     IF (ctrl_continuing .OR. gui_restart) then
