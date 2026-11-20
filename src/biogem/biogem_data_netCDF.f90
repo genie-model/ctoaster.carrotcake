@@ -14,6 +14,18 @@ MODULE biogem_data_netCDF
   IMPLICIT NONE
   SAVE
 
+  ! ---- Annual-average accumulator for the live 2D-fields snapshot ----------- !
+  ! biogem_fields_snapshot.nc holds ONE annual-mean frame per model year. Andy's
+  ! call: a seasonal (4x/yr) snapshot under-samples and aliases a seasonal signal
+  ! riding a trend; an annual average guarantees >=1 frame per year and never
+  ! skips one. We sum ocn() every timestep here and divide by the sample count at
+  ! the year boundary (sub_fields_snapshot_update), publishing the completed
+  ! year's mean; sub_fields_snapshot_finalize flushes the final partial year at
+  ! run end. Sub-seafloor cells are masked out on write.
+  real, allocatable :: fields_snap_accum(:,:,:,:)   ! running sum of ocn over the current year
+  integer :: fields_snap_count = 0                  ! samples accumulated in the current year
+  integer :: fields_snap_year  = -HUGE(1)           ! current year bucket; -HUGE => not started
+
 
 CONTAINS
 
@@ -233,6 +245,223 @@ CONTAINS
     ! -------------------------------------------------------- !
   END SUBROUTINE sub_data_netCDF_temp_snapshot
   ! ****************************************************************************************************************************** !
+
+
+  ! ****************************************************************************************************************************** !
+  ! SAVE 3D FIELDS SNAPSHOT (all selected ocean tracers, overwritten each call)
+  !
+  ! Generalises sub_data_netCDF_temp_snapshot from a single surface field to every
+  ! selected ocean tracer over the full water column, so the frontend can plot live
+  ! horizontal maps (at any depth level) and vertical sections (at any latitude) for
+  ! any variable. It writes ONE annual-mean frame per model year (Andy's call vs. a
+  ! seasonal snapshot -- see the module-level accumulator notes): the mean comes from
+  ! fields_snap_accum / fields_snap_count, built by sub_fields_snapshot_update. Like
+  ! the temperature snapshot it writes a single record to a .tmp file then atomically
+  ! renames, and carries the model year as the frontend change token + "Year" label.
+  !
+  ! When called with dum_is_init = .TRUE. (once, at model init) the data is written
+  ! all-zero with year = -1: that file exists purely so the frontend can read variable
+  ! names + axes and build its dropdowns before any real data has been produced (and
+  ! the -1 year keeps the frontend from treating it as a real frame).
+  !
+  ! v1 scope: ocean tracers of type 0 and 1 (temperature, salinity, and the scalar
+  ! biogeochem concentrations). Isotope tracers (ocn_type in n_itype_min:n_itype_max)
+  ! are deliberately skipped for now -- they need delta conversion whose zero-bulk
+  ! fallback emits a sentinel that would corrupt the frontend's auto-scaled colour
+  ! range; adding them is a later, self-contained extension.
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_data_netCDF_fields_snapshot(dum_name, dum_year, dum_is_init)
+    ! -------------------------------------------------------- !
+    ! DUMMY ARGUMENTS
+    ! -------------------------------------------------------- !
+    character(LEN=*), INTENT(IN) :: dum_name      ! final output file path
+    INTEGER,          INTENT(IN) :: dum_year      ! model year for this frame (token + label); -1 at init
+    LOGICAL,          INTENT(IN) :: dum_is_init   ! .true. => zero-filled metadata file (no data yet)
+    ! -------------------------------------------------------- !
+    ! DEFINE LOCAL VARIABLES
+    ! -------------------------------------------------------- !
+    integer :: l, io, i, j, k
+    integer :: loc_iou, loc_ntrec
+    integer :: loc_id_time, loc_id_lonm, loc_id_latm, loc_id_zt
+    integer :: loc_rename_stat
+    integer, dimension(1) :: loc_it_1
+    integer, dimension(4) :: loc_it_4
+    character(127) :: loc_title, loc_timunit
+    character(8)   :: loc_string_year
+    character(32)  :: loc_year_str
+    character(255) :: loc_name_tmp
+    real :: loc_c0, loc_c1, loc_rcount
+    real, dimension(n_i, n_j, n_k) :: loc_ijk, loc_mask
+    ! -------------------------------------------------------- !
+    ! INITIALIZE LOCAL VARIABLES
+    ! -------------------------------------------------------- !
+    loc_c0 = 0.0 ; loc_c1 = 1.0
+    loc_ijk  = 0.0
+    loc_mask = phys_ocn(ipo_mask_ocn, :, :, :)
+    ! annual mean = (sum of ocn over the year) / (number of samples); the init
+    ! call carries no samples and writes all-zero, so guard the reciprocal
+    if (fields_snap_count > 0) then
+       loc_rcount = 1.0 / real(fields_snap_count)
+    else
+       loc_rcount = 0.0
+    end if
+    ! write to a temporary file first, then atomically rename, so a concurrent
+    ! reader (REST endpoint) never sees a partially-written file
+    loc_name_tmp = TRIM(dum_name) // '.tmp'
+    ! -------------------------------------------------------- !
+    ! DEFINE FILE STRUCTURE
+    ! -------------------------------------------------------- !
+    call sub_opennew(loc_name_tmp, loc_iou)
+    call sub_redef(loc_iou)
+    ! global attributes
+    loc_string_year = fun_conv_num_char_n(8, dum_year)
+    loc_title   = 'BIOGEM 3D fields annual-mean snapshot @ year ' // loc_string_year
+    loc_timunit = 'Year'
+    call sub_putglobal(loc_iou, dum_name, loc_title, string_ncrunid, loc_timunit)
+    ! model year: doubles as the frontend change token AND the "Year: xxx" label.
+    ! The init file writes -1 so the frontend waits for the first real annual frame.
+    write(loc_year_str, '(I0)') dum_year
+    call sub_putatttext('global', loc_iou, 'year', trim(loc_year_str))
+    ! dimensions: time (unlimited, so sub_putvar3d_g can index a record), lon, lat, zt
+    call sub_defdim('time', loc_iou, const_integer_zero, loc_id_time)
+    call sub_defdim('lon',  loc_iou, n_i, loc_id_lonm)
+    call sub_defdim('lat',  loc_iou, n_j, loc_id_latm)
+    call sub_defdim('zt',   loc_iou, n_k, loc_id_zt)
+    ! axis variables (sub_adddef_netcdf below looks these up by name)
+    loc_it_1(1) = loc_id_time
+    call sub_defvar('time', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'T', 'D', &
+         & 'Year', 'time', trim(loc_timunit))
+    call sub_defvar('year', loc_iou, 1, loc_it_1, loc_c0, loc_c0, ' ', 'F', 'year', ' ', ' ')
+    loc_it_1(1) = loc_id_lonm
+    call sub_defvar('lon', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'X', 'D', &
+         & 'longitude of the t grid', 'longitude', 'degrees_east')
+    loc_it_1(1) = loc_id_latm
+    call sub_defvar('lat', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'Y', 'D', &
+         & 'latitude of the t grid', 'latitude', 'degrees_north')
+    loc_it_1(1) = loc_id_zt
+    call sub_defvar('zt', loc_iou, 1, loc_it_1, loc_c0, loc_c0, 'Z', 'D', &
+         & 'z-level mid depth', 'depth', 'm')
+    ! define each selected tracer as a 4-D field (lon, lat, zt, time) using the
+    ! REAL dimension ids. NB: do not use sub_adddef_netcdf here -- it resolves dims
+    ! via inq_varid and only works when varid==dimid, which our axis layout breaks.
+    loc_it_4(1) = loc_id_lonm ; loc_it_4(2) = loc_id_latm
+    loc_it_4(3) = loc_id_zt   ; loc_it_4(4) = loc_id_time
+    DO l = 1, n_l_ocn
+       io = conv_iselected_io(l)
+       SELECT CASE (ocn_type(io))
+       CASE (0, 1)
+          call sub_defvar('ocn_'//trim(string_ocn(io)), loc_iou, 4, loc_it_4, &
+               & ocn_mima(l, 1), ocn_mima(l, 2), ' ', 'F', &
+               & trim(string_ocn_tlname(l)), ' ', trim(string_ocn_unit(l)))
+       END SELECT
+    END DO
+    call sub_enddef(loc_iou)
+    call sub_sync(loc_iou)
+    ! -------------------------------------------------------- !
+    ! WRITE AXIS DATA (record 1)
+    ! -------------------------------------------------------- !
+    loc_ntrec = 1
+    call sub_putvars ('time', loc_iou, loc_ntrec, real(dum_year), loc_c1, loc_c0)
+    call sub_putvarIs('year', loc_iou, loc_ntrec, dum_year, loc_c1, loc_c0)
+    call sub_putvar1d('lon', loc_iou, n_i, loc_ntrec, n_i, phys_ocn(ipo_lon, :, 1, 1), loc_c1, loc_c0)
+    call sub_putvar1d('lat', loc_iou, n_j, loc_ntrec, n_j, phys_ocn(ipo_lat, 1, :, 1), loc_c1, loc_c0)
+    ! zt reversed (surface-first) to match sub_putvar3d_g's k-reversal below
+    call sub_putvar1d('zt', loc_iou, n_k, loc_ntrec, n_k, phys_ocn(ipo_Dmid, 1, 1, n_k:1:-1), loc_c1, loc_c0)
+    ! -------------------------------------------------------- !
+    ! WRITE EACH SELECTED OCEAN TRACER AS A 3D FIELD (annual mean)
+    ! -------------------------------------------------------- !
+    DO l = 1, n_l_ocn
+       io = conv_iselected_io(l)
+       ! v1: scalar physical / biogeochem tracers only (skip isotopes -- see header)
+       SELECT CASE (ocn_type(io))
+       CASE (0, 1)
+          loc_ijk(:, :, :) = const_real_zero
+          if (.NOT. dum_is_init) then
+             ! annual mean over the water column (k1..n_k); sub-seafloor cells stay
+             ! zero and are masked out by loc_mask on write
+             DO i = 1, n_i
+                DO j = 1, n_j
+                   DO k = goldstein_k1(i, j), n_k
+                      if ((ocn_type(io) == 0) .AND. (io == io_T)) then
+                         loc_ijk(i, j, k) = fields_snap_accum(io, i, j, k) * loc_rcount - const_zeroC  ! K -> degrees C
+                      else
+                         loc_ijk(i, j, k) = fields_snap_accum(io, i, j, k) * loc_rcount
+                      end if
+                   end do
+                end do
+             end do
+          end if
+          ! variable already defined up front; just write this record's data
+          call sub_putvar3d_g('ocn_'//trim(string_ocn(io)), loc_iou, n_i, n_j, n_k, &
+               & loc_ntrec, loc_ijk(:, :, :), loc_mask)
+       END SELECT
+    END DO
+    ! -------------------------------------------------------- !
+    ! CLOSE + ATOMIC PUBLISH
+    ! -------------------------------------------------------- !
+    call sub_closefile(loc_iou)
+    call rename(trim(loc_name_tmp), trim(dum_name), loc_rename_stat)
+    if (loc_rename_stat /= 0) then
+       print *, 'WARNING: fields snapshot rename failed, status =', loc_rename_stat
+    end if
+    ! -------------------------------------------------------- !
+    ! END
+    ! -------------------------------------------------------- !
+  END SUBROUTINE sub_data_netCDF_fields_snapshot
+  ! ****************************************************************************************************************************** !
+
+
+  ! ****************************************************************************************************************************** !
+  ! ACCUMULATE + PUBLISH THE ANNUAL-MEAN FIELDS SNAPSHOT
+  !
+  ! Called every BIOGEM time-step. Sums the live ocn() array into a year buffer;
+  ! when the integer model year advances, publishes the just-completed year's mean
+  ! (via sub_data_netCDF_fields_snapshot) and resets the buffer for the new year.
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_fields_snapshot_update(dum_name, dum_yr)
+    character(LEN=*), INTENT(IN) :: dum_name   ! output file path
+    REAL,             INTENT(IN) :: dum_yr     ! current model year
+    integer :: loc_yr_idx
+    ! allocate the year buffer on first use (sized to the full ocn tracer array)
+    if (.NOT. allocated(fields_snap_accum)) then
+       allocate(fields_snap_accum(n_ocn, n_i, n_j, n_k))
+       fields_snap_accum = 0.0
+       fields_snap_count = 0
+    end if
+    loc_yr_idx = INT(dum_yr)
+    if (fields_snap_year == -HUGE(1)) then
+       fields_snap_year = loc_yr_idx                       ! first call: open the first year's bucket
+    else if (loc_yr_idx /= fields_snap_year) then
+       ! year rolled over: publish the completed year's annual mean, then reset
+       if (fields_snap_count > 0) &
+            & call sub_data_netCDF_fields_snapshot(dum_name, fields_snap_year, .FALSE.)
+       fields_snap_accum = 0.0
+       fields_snap_count = 0
+       fields_snap_year  = loc_yr_idx
+    end if
+    ! accumulate this time-step into the current year's bucket
+    fields_snap_accum(:, :, :, :) = fields_snap_accum(:, :, :, :) + ocn(:, :, :, :)
+    fields_snap_count = fields_snap_count + 1
+  END SUBROUTINE sub_fields_snapshot_update
+  ! ****************************************************************************************************************************** !
+
+
+  ! ****************************************************************************************************************************** !
+  ! FLUSH THE FINAL (PARTIAL) YEAR AT RUN END
+  !
+  ! The rollover in sub_fields_snapshot_update never fires for the last year, so
+  ! call this once from end_biogem to publish that year's mean-so-far. Guarantees
+  ! the final year is never skipped (Andy: "never skip a year").
+  ! ****************************************************************************************************************************** !
+  SUBROUTINE sub_fields_snapshot_finalize(dum_name)
+    character(LEN=*), INTENT(IN) :: dum_name   ! output file path
+    if (allocated(fields_snap_accum) .AND. (fields_snap_count > 0)) then
+       call sub_data_netCDF_fields_snapshot(dum_name, fields_snap_year, .FALSE.)
+       fields_snap_count = 0
+    end if
+  END SUBROUTINE sub_fields_snapshot_finalize
+  ! ****************************************************************************************************************************** !
+
 
   ! ****************************************************************************************************************************** !
   ! INITIALIZE netCDF

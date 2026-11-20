@@ -1253,6 +1253,143 @@ async def get_temp_snapshot(job_name: str, current_user=Depends(get_current_user
 
 
 # =============================================================================
+# 3D fields snapshot (live 2D plots for all variables)
+# =============================================================================
+#
+# The Fortran model writes biogem_fields_snapshot.nc: a single-record netCDF
+# holding every selected ocean tracer over the full water column, written
+# zero-filled at run start (for metadata) then overwritten with live values each
+# season (same cadence + quarter_index token as the SST snapshot). The frontend
+# fetches the metadata once to build its dropdowns, then polls one variable's
+# full array and slices it (depth level / latitude) client-side.
+
+_FIELDS_SNAPSHOT_FILE = "biogem_fields_snapshot.nc"
+
+
+def _open_fields_snapshot(current_user, job_name):
+    """Resolve + open the fields snapshot for a job. Returns an open
+    netCDF4.Dataset (caller must close) or raises HTTPException(404)."""
+    job_path = _resolve_read_path(current_user, job_name)
+    try:
+        plot_data_path = find_plot_data_path(job_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    snapshot_path = os.path.join(plot_data_path, _FIELDS_SNAPSHOT_FILE)
+    if not os.path.isfile(snapshot_path):
+        raise HTTPException(
+            status_code=404, detail="Fields snapshot not yet available"
+        )
+    try:
+        return nc.Dataset(snapshot_path, "r")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Error opening fields snapshot: {exc}"
+        )
+
+
+def _is_field_var(ds, name):
+    """A plottable field is any variable whose dims include both lon and lat
+    (excludes the lon/lat/zt/time/year coordinate variables)."""
+    dims = ds.variables[name].dimensions
+    return ("lon" in dims) and ("lat" in dims)
+
+
+def _snapshot_token(ds):
+    # The fields snapshot stamps the model year as its change token: one annual-mean
+    # frame per year, so a new year == a new frame. The init/zero file carries -1.
+    try:
+        return int(ds.getncattr("year"))
+    except (AttributeError, ValueError):
+        return -1
+
+
+@app.get("/get-fields-meta/{job_name}")
+async def get_fields_meta(job_name: str, current_user=Depends(get_current_user)):
+    """
+    Metadata for the 2D-field plots: the lon/lat/depth axes and the list of
+    plottable variables (name, human-readable label, units, and whether the
+    variable has a depth dimension). Available from run start because the model
+    writes a zero-filled snapshot at init, so the frontend can build its
+    dropdowns before any data exists.
+    """
+    ds = _open_fields_snapshot(current_user, job_name)
+    try:
+        lon = ds.variables["lon"][:].tolist()
+        lat = ds.variables["lat"][:].tolist()
+        depth = ds.variables["zt"][:].tolist() if "zt" in ds.variables else []
+        variables = []
+        for name in ds.variables:
+            if not _is_field_var(ds, name):
+                continue
+            var = ds.variables[name]
+            variables.append(
+                {
+                    "name": name,
+                    "label": getattr(var, "long_name", name).strip() or name,
+                    "units": getattr(var, "units", "").strip(),
+                    "is3d": "zt" in var.dimensions,
+                }
+            )
+        variables.sort(key=lambda v: v["label"].lower())
+        token = _snapshot_token(ds)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading fields metadata: {exc}"
+        )
+    finally:
+        ds.close()
+
+    return {
+        "token": token,
+        "lon": lon,
+        "lat": lat,
+        "depth": depth,
+        "variables": variables,
+    }
+
+
+@app.get("/get-field-snapshot/{job_name}/{var_name}")
+async def get_field_snapshot(
+    job_name: str, var_name: str, current_user=Depends(get_current_user)
+):
+    """
+    The full array for a single variable plus the change token. For a 3D
+    variable this is depth x lat x lon (surface-first depth order); for a 2D
+    variable it is lat x lon. Masked land / below-seafloor cells are null. The
+    frontend does all depth-level / latitude slicing on this array client-side,
+    so switching slices needs no extra request.
+    """
+    ds = _open_fields_snapshot(current_user, job_name)
+    try:
+        if var_name not in ds.variables or not _is_field_var(ds, var_name):
+            raise HTTPException(
+                status_code=404, detail=f"Unknown field variable: {var_name}"
+            )
+        var = ds.variables[var_name]
+        is3d = "zt" in var.dimensions
+        # Drop the leading unit-length time axis. netCDF4 returns Fortran
+        # (lon,lat,zt,time) as (time,zt,lat,lon); (lon,lat,time) as (time,lat,lon).
+        # .tolist() turns masked (land / sub-seafloor) cells into None.
+        values = var[0].tolist()
+        token = _snapshot_token(ds)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading field '{var_name}': {exc}"
+        )
+    finally:
+        ds.close()
+
+    # token == the model year of this annual-mean frame; the frontend uses it both
+    # to detect a new frame and to show the "Year: xxx" label.
+    return {"token": token, "year": token, "name": var_name, "is3d": is3d, "values": values}
+
+
+# =============================================================================
 # Download job zip
 # =============================================================================
 
