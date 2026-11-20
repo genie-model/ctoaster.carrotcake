@@ -502,7 +502,7 @@ gcloud sql databases create ctoaster --instance=ctoaster-db
 
 gcloud sql users create ctoaster_user \
   --instance=ctoaster-db \
-  --password='Geronemo#101'
+  --password='<DB_PASSWORD>'
 ```
 
 Note the **instance connection name**:
@@ -623,7 +623,7 @@ kubectl apply -f k8s/base/api-rbac.yaml
 
 # 3. App secrets (create manually — never commit plaintext secrets to git)
 kubectl -n ${NAMESPACE} create secret generic ctoaster-secrets \
-  --from-literal=db-url="postgresql://ctoaster_user:Geronemo#101@127.0.0.1:5432/ctoaster" \
+  --from-literal=db-url="postgresql://ctoaster_user:<DB_PASSWORD>@127.0.0.1:5432/ctoaster" \
   --from-literal=jwt-secret="$(openssl rand -hex 32)"
 
 # 4. Cloud SQL Auth Proxy key secret (from the key file downloaded in Step 7)
